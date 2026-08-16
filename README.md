@@ -29,7 +29,7 @@ With `--graph`, a Free Vision text UI shows the last hours as a bar graph — re
 ║   9.8 |████████████████████████████████████████████████████████▄▄▄▄███│░░░░▒▒║
 ║        18:05          19:20          20:35          21:50                    ║
 ╚═════════════════════════════════════════════════════════════════════════════─┘
- Alt-X Exit  F5 Refresh  F6 Forecast
+ Alt-X Exit  F5 Refresh  F6 Forecast  F9 Settings
 ```
 
 Past the `│` divider is a half-hour forecast, drawn in shade rather than solid so it never reads as measured data. It comes from Trndi's own prediction model — a robust weighted regression with a curvature term — and appears only when the fit is worth showing: a flat trend or a noisy sensor leaves it out entirely, and the header carries the horizon and the model's own confidence. `F6` toggles it, `--no-predict` starts without it. It knows nothing about insulin or carbs, so treat it as the shape of the last half hour continued, not a plan.
@@ -58,10 +58,11 @@ Stats — last 24 h — NightScout v3
 
 ```
 trndi-cli               print the current reading and exit
-trndi-cli --graph       interactive TUI graph (F5 refresh, F6 forecast, Alt-X exit)
+trndi-cli --graph       interactive TUI graph (F5 refresh, F6 forecast, F9 settings, Alt-X exit)
 trndi-cli --no-predict  ... with the forecast hidden from the start
 trndi-cli --stats       summarise the last 24 h
 trndi-cli --stats 6     ... or any window from 1 to 168 hours
+trndi-cli --setup       settings window: backend, address, secret, unit
 trndi-cli --help        options
 ```
 
@@ -87,7 +88,30 @@ Running on Windows needs `libcurl.dll` ([curl.se/windows](https://curl.se/window
 
 ## Configuration
 
-Configured Trndi GUI = done. Without the GUI, set the few values by hand — see the [manual](MANUAL.md).
+Configured Trndi GUI = done. Without the GUI, `--setup` opens a settings window in the same Free Vision style as the graph — backend, address, secret and unit, with a Test button that connects before you save. `F9` opens the same window from graph mode.
+
+```
+╔═[■]═════════════════════ Trndi settings ═════════════════════════╗
+║   Backend                        Address / account               ║
+║   NightScout                ▲    https://my.nightscout.site      ║
+║   NightScout v3             ■                                    ║
+║   Dexcom (USA)              ▒    Secret / password               ║
+║   Dexcom (Outside USA)      ▒    ******                          ║
+║   Dexcom New (USA)          ▒                                    ║
+║   Dexcom New (Outside USA)  ▒    Unit                            ║
+║   Dexcom New (Japan)        ▒    (*) mmol/L                      ║
+║   Tandem t:connect (USA)    ▼    ( ) mg/dL                       ║
+║                                                                  ║
+║  Address: the Nightscout site URL. Secret: API secret or access  ║
+║   token.                                                         ║
+║  No secret stored yet.                                           ║
+║  Saved in /home/you/.config/Trndi.cfg                            ║
+║                                                                  ║
+║                                 OK       Test      Cancel        ║
+╚══════════════════════════════════════════════════════════════════╝
+```
+
+It writes exactly what the GUI reads, in the place the GUI reads it, so the two stay interchangeable. The values can also be set by hand — see the [manual](MANUAL.md).
 
 ## License
 

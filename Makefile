@@ -14,7 +14,7 @@ FPCFLAGS := -Mobjfpc -Sh -dX_CONSOLE -dWITHTHREADS $(UNITDIRS) -Fi$(T)/inc \
 
 all: bin/trndi-cli
 
-bin/trndi-cli: src/trndicli.pas $(wildcard $(T)/units/trndi/*.pp $(T)/units/trndi/api/*.pp)
+bin/trndi-cli: src/trndicli.pas src/trndicli.settings.pas $(wildcard $(T)/units/trndi/*.pp $(T)/units/trndi/api/*.pp)
 	@mkdir -p build bin
 	$(FPC) $(FPCFLAGS) src/trndicli.pas
 

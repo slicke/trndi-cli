@@ -57,15 +57,17 @@ cthreads, // MUST be first: trndi.native.async starts a worker thread; without
 {$ENDIF}
 SysUtils, DateUtils,
 {$IFDEF WINDOWS}
-registry, Windows,
+Windows,
 {$ENDIF}
 App, Objects, Drivers, Views, Menus, FVConsts,
 trndi.native, trndi.native.console,
-trndi.api, trndi.api.registry, trndi.types, trndi.funcs.core;
+trndi.api, trndi.api.registry, trndi.types, trndi.funcs.core,
+trndicli.settings;
 
 const
   cmRefresh = 1000;                   // FV user command for F5/refresh
   cmPredict = 1001;                   // ... and for F6/forecast toggle
+  cmSetup = 1002;                     // ... and for F9/settings window
   POLL_INTERVAL_MS = 5 * 60 * 1000;   // graph mode refetch cadence
   // Fetch more than any reasonable terminal is wide (one column per
   // reading); Draw shows the newest readings that fit the window.
@@ -75,23 +77,6 @@ const
   // about insulin or carbs, so a longer horizon would only look precise.
   PREDICT_COUNT = 6;
   PREDICT_MIN_CONF = 0.5;             // below this the fit is not worth drawing
-
-type
-  {** The console native resolves settings to GetAppConfigDir + trndi.ini,
-      but the GUI stores them elsewhere: on Linux via GetAppConfigFile
-      (~/.config/Trndi.cfg), on Windows in HKCU\SOFTWARE\Trndi. Read the GUI's
-      store on both so a configured GUI is all the setup needed;
-      OnGetApplicationName makes ApplicationName = 'Trndi' regardless of this
-      binary's file name. }
-  TCliNative = class(TTrndiNativeConsole)
-  protected
-    function ResolveIniPath: string; override;
-  public
-{$IFDEF WINDOWS}
-    function GetSetting(const keyname: string; def: string = '';
-      global: boolean = false): string; override;
-{$ENDIF}
-  end;
 
 var
   gApi: TrndiAPI = nil;
@@ -113,78 +98,88 @@ begin
   Result := 'Trndi';
 end;
 
-function TCliNative.ResolveIniPath: string;
-begin
-  Result := GetAppConfigFile(false);
-end;
-
-{$IFDEF WINDOWS}
-// The Windows GUI keeps settings in the registry, not an INI — read the same
-// values (HKCU\SOFTWARE\Trndi, value names like 'remote.type').
-function TCliNative.GetSetting(const keyname: string; def: string;
-global: boolean): string;
-var
-  reg: TRegistry;
-begin
-  Result := def;
-  reg := TRegistry.Create;
-  try
-    reg.RootKey := HKEY_CURRENT_USER;
-    if reg.OpenKeyReadOnly('\SOFTWARE\Trndi\') then
-      if reg.ValueExists(keyname) then
-        Result := reg.ReadString(keyname);
-  finally
-    reg.Free;
-  end;
-end;
-{$ENDIF}
-
 {------------------------------------------------------------------------------
   Data access
  ------------------------------------------------------------------------------}
+
+// Build and connect a backend from a set of settings. Reports rather than
+// halts, since graph mode swaps backends with the TUI on the screen — there
+// stderr is invisible and halting would take the window with it.
+function OpenBackend(const s: TCliSettings; out api: TrndiAPI;
+out err: string): boolean;
+begin
+  Result := false;
+  err := '';
+  api := CreateBackend(s.backend, s.target, s.creds);
+  if api = nil then
+  begin
+    err := Format('Unknown backend "%s" in settings.', [s.backend]);
+    exit;
+  end;
+  if not api.connect then
+  begin
+    err := api.errormsg;
+    FreeAndNil(api);
+    exit;
+  end;
+  Result := true;
+end;
+
+// An unconfigured machine is the one case where the settings window is worth
+// pushing: the alternative is telling the user which file to write by hand.
+// Only on a terminal, though — a piped or scripted run keeps the old message
+// and the old exit code.
+function OfferSetup: boolean;
+var
+  ans: string;
+begin
+  Result := false;
+  if not ConsoleIsInteractive then
+  begin
+    writeln(stderr, 'No backend configured. Run trndi-cli --setup, or the ' +
+      'Trndi GUI setup (no remote.type in ', SettingsLocation, ').');
+    exit;
+  end;
+  writeln(stderr, 'No backend configured (no remote.type in ',
+    SettingsLocation, ').');
+  write(stderr, 'Open the settings window now? [Y/n] ');
+  readln(ans);
+  ans := LowerCase(Trim(ans));
+  if (ans = '') or (ans = 'y') or (ans = 'yes') then
+    Result := RunSetup;
+end;
 
 // Connect the backend stored in the GUI settings; halts with a message and
 // a distinct exit code when configuration or connection fails.
 procedure ConnectBackend;
 var
-  native: TCliNative;
-  remoteType, target, creds: string;
+  s: TCliSettings;
+  err: string;
 begin
-  native := TCliNative.Create;
-  try
-    remoteType := native.GetSetting('remote.type');
-    target := native.GetSetting('remote.target');
-    creds := native.GetSetting('remote.creds');
-    if native.GetSetting('unit', 'mmol') = 'mmol' then
-      gUnit := mmol
-    else
-      gUnit := mgdl;
-  finally
-    native.Free;
+  s := LoadSettings;
+  if s.backend = '' then
+  begin
+    if not OfferSetup then
+      halt(1);
+    s := LoadSettings;
+    if s.backend = '' then
+      halt(1);
   end;
 
-  if remoteType = '' then
-  begin
-{$IFDEF WINDOWS}
-    writeln(stderr, 'No backend configured. Run the Trndi GUI setup first ' +
-      '(no remote.type in HKCU\SOFTWARE\Trndi).');
-{$ELSE}
-    writeln(stderr, 'No backend configured. Run the Trndi GUI setup first ' +
-      '(no remote.type in ', GetAppConfigFile(false), ').');
-{$ENDIF}
-    halt(1);
-  end;
+  if s.mmol then
+    gUnit := mmol
+  else
+    gUnit := mgdl;
 
-  gApi := CreateBackend(remoteType, target, creds);
-  if gApi = nil then
+  if not BackendExists(s.backend) then
   begin
-    writeln(stderr, 'Unknown backend "', remoteType, '" in settings.');
+    writeln(stderr, 'Unknown backend "', s.backend, '" in settings.');
     halt(2);
   end;
 
-  if not gApi.connect then
+  if not OpenBackend(s, gApi, err) then
   begin
-    writeln(stderr, 'Could not connect: ', gApi.errormsg);
+    writeln(stderr, 'Could not connect: ', err);
     halt(3);
   end;
 end;
@@ -541,8 +536,34 @@ begin
       NewStatusKey('~Alt-X~ Exit', kbAltX, cmQuit,
       NewStatusKey('~F5~ Refresh', kbF5, cmRefresh,
       NewStatusKey('~F6~ Forecast', kbF6, cmPredict,
-      nil))),
+      NewStatusKey('~F9~ Settings', kbF9, cmSetup,
+      nil)))),
     nil)));
+end;
+
+// Settings changed under a running graph. The new backend replaces the old one
+// only once it has connected: a typo in the settings window should cost a
+// message, not the session's data.
+procedure ReloadBackend;
+var
+  s: TCliSettings;
+  api: TrndiAPI;
+  err: string;
+begin
+  s := LoadSettings;
+  if not OpenBackend(s, api, err) then
+  begin
+    ShowError('Could not connect with the new settings: ' + err +
+      #13#13 + 'The previous backend is still in use.');
+    exit;
+  end;
+  gApi.Free;
+  gApi := api;
+  if s.mmol then
+    gUnit := mmol
+  else
+    gUnit := mgdl;
+  FetchAll;
 end;
 
 procedure TTrndiTui.HandleEvent(var Event: TEvent);
@@ -562,6 +583,15 @@ begin
     // fetch here rather than leaving the key press look like it did nothing.
     if gPredictEnabled and (not gPredictOK) then
       FetchPredictions;
+    if GraphWin <> nil then
+      GraphWin^.Redraw;
+    ClearEvent(Event);
+  end
+  else if (Event.What = evCommand) and (Event.Command = cmSetup) then
+  begin
+    if ExecSetupDialog then
+      ReloadBackend;
+    // Redraw either way: the dialog covered the graph while it was open.
     if GraphWin <> nil then
       GraphWin^.Redraw;
     ClearEvent(Event);
@@ -804,6 +834,22 @@ begin
   Tui.Done;
 end;
 
+// --setup: the settings window on its own, with no backend needed to get
+// there. Writes to the same store the GUI uses.
+procedure RunSetupMode;
+begin
+  if not ConsoleIsInteractive then
+  begin
+    writeln(stderr, '--setup needs a terminal; settings live in ',
+      SettingsLocation, '.');
+    halt(64);
+  end;
+  if RunSetup then
+    writeln('Settings saved in ', SettingsLocation, '.')
+  else
+    writeln('Settings unchanged.');
+end;
+
 procedure RunOnce;
 begin
   FetchCurrent;
@@ -824,6 +870,7 @@ begin
   writeln(Format('  -s, --stats [H]  summarise the last H hours (default %d, max %d)',
     [STATS_DEFAULT_HOURS, STATS_MAX_HOURS]));
   writeln('      --no-predict graph mode: start without the forecast (F6 toggles)');
+  writeln('      --setup      settings window: backend, address, secret, unit');
   writeln('  -h, --help       show this help');
 end;
 
@@ -850,6 +897,7 @@ var
   eq: SizeInt;
   graphMode: boolean = false;
   statsMode: boolean = false;
+  setupMode: boolean = false;
   statsHours: integer = STATS_DEFAULT_HOURS;
 begin
   OnGetApplicationName := @TrndiAppName;
@@ -888,6 +936,8 @@ begin
     end;
     '--no-predict':
       gPredictEnabled := false;
+    '--setup':
+      setupMode := true;
     '-h', '--help':
     begin
       Usage;
@@ -901,13 +951,23 @@ begin
 
   if graphMode and statsMode then
     BadUsage('--graph and --stats cannot be combined.');
+  if setupMode and (graphMode or statsMode) then
+    BadUsage('--setup cannot be combined with --graph or --stats.');
 
 {$IFDEF WINDOWS}
   // The reading line and the stats bars are UTF-8; the console needs telling.
-  // Graph mode is left alone — Free Vision drives the console itself there.
-  if not graphMode then
+  // Graph mode and the settings window are left alone — Free Vision drives the
+  // console itself there.
+  if not (graphMode or setupMode) then
     SetConsoleOutputCP(CP_UTF8);
 {$ENDIF}
+
+  // Settings are all --setup needs; connecting is somebody else's problem.
+  if setupMode then
+  begin
+    RunSetupMode;
+    halt(0);
+  end;
 
   ConnectBackend;
   try

@@ -4,6 +4,7 @@ trndi-cli reads the settings the [Trndi](https://github.com/slicke/trndi) GUI sa
 
 ## Table of Contents
 - [What trndi-cli reads](#what-trndi-cli-reads)
+- [The settings window](#the-settings-window)
 - [Linux](#linux)
 - [Windows](#windows)
 - [Backends](#backends)
@@ -20,6 +21,35 @@ Only four settings are used:
 | `remote.target` | Backend address                                     | e.g. `https://my.nightscout.site` |
 | `remote.creds`  | Credential (secret, token or password — see below)  |                              |
 | `unit`          | Display unit                                        | `mmol` (default) or `mgdl`   |
+
+The rest of this page describes those four values and where they live. Setting
+them from trndi-cli itself is one command — see below.
+
+## The settings window
+
+`trndi-cli --setup` opens a Free Vision window over the four values: a backend
+picker, the address and secret fields, and the unit. `F9` opens the same window
+from graph mode, where saving reconnects and refetches; a backend that fails to
+connect is reported and the running one kept. On a machine with nothing
+configured, a plain `trndi-cli` offers the window rather than only naming the
+file to write.
+
+It writes the same keys in the same place the GUI uses, so a machine can be set
+up from either side. Three things worth knowing:
+
+- **The secret is never shown.** Leave the field empty to keep the stored one;
+  what you type is masked. A CareLink credential is a JSON token blob only the
+  GUI can capture, and it is longer than the field allows — configure CareLink
+  in the GUI, or by hand as below.
+- **The address means something different per backend**, which the line under
+  the fields spells out for whichever one is selected. The same rules the GUI
+  applies are checked when you save.
+- **Test** connects with the values on screen without saving them. It costs one
+  request, and the window sits still until the backend answers.
+
+The window needs a terminal of at least 68x21, and a terminal at all: with
+input or output redirected, `--setup` refuses (exit 64) and an unconfigured run
+falls back to the message and exit 1.
 
 ## Linux
 
@@ -90,11 +120,11 @@ trndi-cli exits with a distinct code and a message on stderr:
 
 | Exit | Meaning | Fix |
 |------|---------|-----|
-| `1` | No backend configured | Set `remote.type` as described above |
+| `1` | No backend configured | Run `trndi-cli --setup`, or set `remote.type` as described above |
 | `2` | Unknown backend | Check `remote.type` against the table |
 | `3` | Connection failed | Message includes the backend's error — check address/credentials |
 | `4` | No recent reading | Backend reachable but silent > 24 h (with `--stats`: nothing in the requested window) — check the uploader |
-| `64` | Bad command line | Unknown option, or a `--stats` window outside 1–168 hours |
+| `64` | Bad command line | Unknown option, a `--stats` window outside 1–168 hours, or `--setup` without a terminal |
 
 **Windows: "libcurl.dll was not found"** — this pops up before trndi-cli even runs; see the note under [Windows](#windows).
 
