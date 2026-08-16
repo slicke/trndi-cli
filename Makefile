@@ -25,7 +25,15 @@ debug: src/trndicli.pas
 clean:
 	rm -rf build bin
 
-PREFIX ?= /usr/local
+# Haiku has no /usr/local: hand-built software lives under non-packaged, and
+# the data directory is data/ rather than share/. Everywhere else the usual.
+ifeq ($(shell uname -s),Haiku)
+  PREFIX ?= /boot/home/config/non-packaged
+  DATADIR ?= $(PREFIX)/data
+else
+  PREFIX ?= /usr/local
+  DATADIR ?= $(PREFIX)/share
+endif
 
 # The binary into $(PREFIX)/bin and the shell completions where bash, zsh and
 # fish look. Two steps rather than install -D: BSD install has no -D.
@@ -34,19 +42,19 @@ install: bin/trndi-cli install-completions
 	install -m 755 bin/trndi-cli $(DESTDIR)$(PREFIX)/bin/trndi-cli
 
 install-completions:
-	install -d $(DESTDIR)$(PREFIX)/share/bash-completion/completions
-	install -m 644 completions/trndi-cli.bash $(DESTDIR)$(PREFIX)/share/bash-completion/completions/trndi-cli
-	install -d $(DESTDIR)$(PREFIX)/share/zsh/site-functions
-	install -m 644 completions/_trndi-cli $(DESTDIR)$(PREFIX)/share/zsh/site-functions/_trndi-cli
-	install -d $(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d
-	install -m 644 completions/trndi-cli.fish $(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/trndi-cli.fish
+	install -d $(DESTDIR)$(DATADIR)/bash-completion/completions
+	install -m 644 completions/trndi-cli.bash $(DESTDIR)$(DATADIR)/bash-completion/completions/trndi-cli
+	install -d $(DESTDIR)$(DATADIR)/zsh/site-functions
+	install -m 644 completions/_trndi-cli $(DESTDIR)$(DATADIR)/zsh/site-functions/_trndi-cli
+	install -d $(DESTDIR)$(DATADIR)/fish/vendor_completions.d
+	install -m 644 completions/trndi-cli.fish $(DESTDIR)$(DATADIR)/fish/vendor_completions.d/trndi-cli.fish
 
 # Remove what install put there. The share/ directories stay: they are the
 # shells' own, not ours.
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/trndi-cli
-	rm -f $(DESTDIR)$(PREFIX)/share/bash-completion/completions/trndi-cli
-	rm -f $(DESTDIR)$(PREFIX)/share/zsh/site-functions/_trndi-cli
-	rm -f $(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/trndi-cli.fish
+	rm -f $(DESTDIR)$(DATADIR)/bash-completion/completions/trndi-cli
+	rm -f $(DESTDIR)$(DATADIR)/zsh/site-functions/_trndi-cli
+	rm -f $(DESTDIR)$(DATADIR)/fish/vendor_completions.d/trndi-cli.fish
 
 .PHONY: all debug clean install install-completions uninstall

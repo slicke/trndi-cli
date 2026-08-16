@@ -247,14 +247,14 @@ begin
 end;
 
 function ScreenSizeChanged(out mode: TVideoMode): boolean;
-{$IFDEF UNIX}
+{$IF DEFINED(UNIX) OR DEFINED(HAIKU)}
 var
   ws: TWinSize;
 {$ENDIF}
 begin
   Result := false;
   FillChar(mode, SizeOf(mode), 0);
-{$IFDEF UNIX}
+{$IF DEFINED(UNIX) OR DEFINED(HAIKU)}
   if fpIOCtl(StdInputHandle, TIOCGWINSZ, @ws) <> 0 then
     exit;
   // FV addresses at most FVMaxWidth columns and keeps the width in a byte, so

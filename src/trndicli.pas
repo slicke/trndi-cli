@@ -52,9 +52,11 @@ program trndicli;
 {$mode objfpc}{$H+}
 
 uses
-{$IFDEF UNIX}
+{$IF DEFINED(UNIX) OR DEFINED(HAIKU)}
 cthreads, // MUST be first: trndi.native.async starts a worker thread; without
           // a thread driver the RTL aborts with RE 232 (uncatchable).
+          // Haiku needs it too but does not define UNIX, hence the OR — the
+          // same guard Trndi.lpr uses.
 {$ENDIF}
 SysUtils, DateUtils,
 {$IFDEF WINDOWS}
