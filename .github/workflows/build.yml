@@ -48,6 +48,41 @@ jobs:
           name: trndi-cli-linux-${{ matrix.arch }}
           path: trndi-cli-linux-${{ matrix.arch }}
 
+  # 32-bit x86 for the old machines that make good bedside displays. There is
+  # no i386 runner and apt has no cross-fpc, so an i386 Debian container does
+  # the build — 32-bit x86 runs natively on the amd64 runner, no emulation.
+  # It goes through `docker run` rather than the job's `container:` key because
+  # the Actions runner ships no i386 node, so the JS actions (checkout, upload)
+  # have to stay on the host.
+  linux-i686:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build and smoke test in an i386 container
+        run: |
+          docker run --rm --platform linux/386 -v "$PWD:/src" -w /src i386/debian:12 sh -euc '
+            apt-get update
+            apt-get install -y --no-install-recommends make fpc fp-units-fv libcurl4-openssl-dev
+            make
+            ./bin/trndi-cli --help
+            # No settings in CI: the unconfigured case must exit 1, not crash.
+            set +e
+            ./bin/trndi-cli
+            code=$?
+            set -e
+            test "$code" -eq 1
+          '
+
+      - name: Upload binary
+        run: cp bin/trndi-cli trndi-cli-linux-i686
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trndi-cli-linux-i686
+          path: trndi-cli-linux-i686
+
   # No aarch64 leg: FreeBSD's package builders do not ship fpc for aarch64
   # (the port is amd64/i386-only), verified 2026-08-16 — the VM's pkg install
   # finds nothing. Revisit if lang/fpc ever gains ONLY_FOR_ARCHS aarch64.
@@ -89,6 +124,87 @@ jobs:
         with:
           name: trndi-cli-freebsd-${{ matrix.arch }}
           path: trndi-cli-freebsd-${{ matrix.arch }}
+
+  # Haiku has no runner either, but cross-platform-actions boots the
+  # haiku-builder image (r1beta5, x86-64) under QEMU on a Linux one. Upstream
+  # Trndi already supports Haiku; here X_CONSOLE selects trndi.native.console
+  # as it does everywhere, so only the toolchain is in question — HaikuPorts'
+  # fpc pulls libncurses, which is what FPC's video/keyboard drivers (and so
+  # Free Vision) need. devel:libcurl for the unversioned libcurl.so the
+  # bindings name. The VM syncs the workspace both ways, so the binary comes
+  # back to the runner for the artifact step.
+  # Advisory: the emulated VM does not always come up inside the action's boot
+  # window, and HaikuPorts' r1beta5 route is broken as of 2026-08-17. Neither
+  # is ours to fix, and neither should hold up a release, so a red Haiku leg
+  # reports without blocking. It stays in publish's needs so the release does
+  # not race it: when the leg is green its binary ships, when it is not the
+  # release simply goes out without it. Drop this once Haiku is dependable.
+  haiku:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: cpa.sh {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Start Haiku VM
+        uses: cross-platform-actions/action@v1.4.0
+        with:
+          operating_system: haiku
+          version: 'r1beta5'
+          architecture: x86-64
+          shell: bash
+          cpu_count: 4   # the runner's full complement; the boot is the slow part
+
+      # HaikuPorts' r1beta5 route is currently dead: the front end redirects to
+      # a CDN that carries only master, and answers the repochecksum request
+      # with a 2-byte JSON listing, so pkgman's refresh fails and it then 404s
+      # on the package its cached index asked for. The same fpc revision does
+      # exist under master, so fall back to fetching that file. Drop the
+      # fallback once the mirror is whole again.
+      - name: Install Free Pascal
+        run: |
+          if ! pkgman install -y fpc devel:libcurl; then
+            curl -fL -o /tmp/fpc.hpkg \
+              https://haikuports-repository.cdn.haiku-os.org/master/x86_64/current/packages/fpc-3.2.2-5-x86_64.hpkg
+            pkgman install -y /tmp/fpc.hpkg
+          fi
+
+      # curl_devel is what normally provides the unversioned libcurl.so the
+      # bindings name; with the repo down, give the linker a symlink to the
+      # versioned library that ships with the base system instead.
+      - name: Point the linker at libcurl
+        run: |
+          mkdir -p /boot/home/config/non-packaged/lib
+          for l in /boot/system/lib/libcurl.so.*; do
+            ln -sf "$l" /boot/home/config/non-packaged/lib/libcurl.so
+            break
+          done
+          ls -l /boot/home/config/non-packaged/lib/
+
+      - name: Build
+        run: make FPCEXTRA='-Fl/boot/home/config/non-packaged/lib'
+
+      - name: Smoke test
+        run: |
+          ./bin/trndi-cli --help
+          # No settings in CI: the unconfigured case must exit 1, not crash.
+          set +e
+          ./bin/trndi-cli
+          code=$?
+          set -e
+          test "$code" -eq 1
+
+      - name: Stage binary
+        run: cp bin/trndi-cli trndi-cli-haiku-x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trndi-cli-haiku-x86_64
+          path: trndi-cli-haiku-x86_64
 
   windows:
     runs-on: windows-latest
@@ -154,7 +270,7 @@ jobs:
   # release assets.
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [linux, freebsd, windows]
+    needs: [linux, linux-i686, freebsd, haiku, windows]
     runs-on: ubuntu-latest
     # Two quick pushes must not race the same build number.
     concurrency: release

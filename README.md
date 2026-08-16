@@ -56,6 +56,13 @@ cd trndi-cli && make        # needs fpc 3.2+ with the Free Vision units
 ./bin/trndi-cli
 ```
 
+Haiku (r1beta5 or newer):
+
+```bash
+pkgman install fpc devel:libcurl
+make        # install goes to /boot/home/config/non-packaged
+```
+
 Windows (PowerShell, FPC from a [Lazarus](https://www.lazarus-ide.org/) install found automatically):
 
 ```powershell
@@ -63,6 +70,8 @@ Windows (PowerShell, FPC from a [Lazarus](https://www.lazarus-ide.org/) install 
 ```
 
 Running on Windows needs `libcurl.dll` ([curl.se/windows](https://curl.se/windows/), rename `libcurl-x64.dll`) next to the exe or in `PATH`.
+
+Every green build on `main` publishes binaries for Linux (x86-64, ARM64 and i686), FreeBSD, Haiku and Windows under [Releases](https://github.com/slicke/trndi-cli/releases).
 
 `sudo make install` puts the binary in `/usr/local/bin` together with tab completion for bash, zsh and fish (`PREFIX`/`DESTDIR` respected for packagers). The completions also work on their own: `make install-completions`, or source `completions/trndi-cli.bash` from your `.bashrc`.
 
