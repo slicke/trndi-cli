@@ -40,7 +40,8 @@
   Console front end for Trndi. By default prints the current BG reading with
   trend arrow and delta, then exits. With --graph it opens a Free Vision TUI
   showing the reading and a block-character graph, refreshing every 5 minutes
-  (F5 forces a refresh).
+  (F5 forces a refresh). With --stats it summarises a period of history:
+  average, variability, GMI and the time-in-range distribution.
 
   Settings are read from the GUI's config (~/.config/Trndi.cfg on Linux), so
   a machine with a configured Trndi needs no setup.
@@ -56,7 +57,7 @@ cthreads, // MUST be first: trndi.native.async starts a worker thread; without
 {$ENDIF}
 SysUtils, DateUtils,
 {$IFDEF WINDOWS}
-registry,
+registry, Windows,
 {$ENDIF}
 App, Objects, Drivers, Views, Menus, FVConsts,
 trndi.native, trndi.native.console,
@@ -469,6 +470,217 @@ begin
 end;
 
 {------------------------------------------------------------------------------
+  Statistics (--stats)
+ ------------------------------------------------------------------------------}
+
+const
+  STATS_DEFAULT_HOURS = 24;
+  STATS_MAX_HOURS = 168;   // a week; beyond that backends stop cooperating
+  BAR_WIDTH = 20;
+  BAR_FULL = '█';
+  BAR_EMPTY = '░';
+
+// Thresholds and computed figures are plain mg/dL numbers rather than
+// BGReadings, so BGReading.format is out of reach — format them here instead.
+// Valid for differences (SD) as well: the conversion has no offset.
+function FmtBG(mgdlVal: double): string;
+begin
+  if gUnit = mmol then
+    Result := Format('%.1f', [mgdlVal * TrndiAPI.toMMOL])
+  else
+    Result := Format('%.0f', [mgdlVal]);
+end;
+
+function FmtDuration(mins: integer): string;
+begin
+  if mins < 60 then
+    Result := Format('%d min', [mins])
+  else if mins mod 60 = 0 then
+    Result := Format('%d h', [mins div 60])
+  else
+    Result := Format('%d h %d min', [mins div 60, mins mod 60]);
+end;
+
+function Bar(pct: double): string;
+var
+  x, filled: integer;
+begin
+  filled := round(pct / 100 * BAR_WIDTH);
+  if (filled = 0) and (pct > 0) then
+    filled := 1;                      // a bucket with readings is never blank
+  if filled > BAR_WIDTH then
+    filled := BAR_WIDTH;
+  Result := '';
+  for x := 1 to BAR_WIDTH do
+    if x <= filled then
+      Result := Result + BAR_FULL
+    else
+      Result := Result + BAR_EMPTY;
+end;
+
+// One distribution row: label, the band it covers, a bar, the share of
+// readings and the time that share stands for at the reporting interval.
+procedure StatRow(const name, band: string; count, total, interval: integer);
+var
+  pct: double;
+begin
+  pct := count / total * 100;
+  writeln(Format('  %-9s %9s  %s %3.0f%%  %s',
+    [name, band, Bar(pct), pct, FmtDuration(count * interval)]));
+end;
+
+// Summarise the last `hours` hours: average, spread, GMI and the standard
+// five-band time-in-range breakdown. The bands come from the backend's own
+// thresholds via getLevel, so they match the colors used in graph mode.
+procedure RunStats(hours: integer);
+var
+  readings: BGResults;
+  core: CGMCore;
+  counts: array[BGValLevel] of integer;
+  lvl: BGValLevel;
+  cutoff, oldest, minAt, maxAt: TDateTime;
+  i, n, interval, expected, coverage, span: integer;
+  v, sum, sumsq, mean, sd, cv, gmi, minV, maxV, inLo, inHi: double;
+  hasTop, hasBottom: boolean;
+  timeFmt, sinceFmt, u: string;
+begin
+  span := hours * 60;
+  interval := gApi.getReportingInterval;
+  if interval < 1 then
+    interval := 5;
+  // Ask for a full window even from a one-minute uploader, plus slack for
+  // backends that count from their own idea of "now".
+  readings := gApi.getReadings(span, span div interval + 16);
+
+  cutoff := IncMinute(Now, -span);
+  n := 0;
+  sum := 0;
+  sumsq := 0;
+  minV := 0;
+  maxV := 0;
+  oldest := 0;
+  minAt := 0;
+  maxAt := 0;
+  for lvl := Low(BGValLevel) to High(BGValLevel) do
+    counts[lvl] := 0;
+
+  for i := 0 to High(readings) do
+  begin
+    if readings[i].date < cutoff then
+      continue;                       // backends may hand back a wider window
+    v := readings[i].convert(mgdl);
+    if (n = 0) or (readings[i].date < oldest) then
+      oldest := readings[i].date;
+    if (n = 0) or (v < minV) then
+    begin
+      minV := v;
+      minAt := readings[i].date;
+    end;
+    if (n = 0) or (v > maxV) then
+    begin
+      maxV := v;
+      maxAt := readings[i].date;
+    end;
+    sum := sum + v;
+    sumsq := sumsq + v * v;
+    Inc(counts[gApi.getLevel(v)]);
+    Inc(n);
+  end;
+
+  if n = 0 then
+  begin
+    writeln(stderr, Format('No readings in the last %d h.', [hours]));
+    halt(4);
+  end;
+
+  mean := sum / n;
+  if n >= 2 then
+    sd := sqrt((sumsq - sum * sum / n) / (n - 1))
+  else
+    sd := 0;
+  if mean > 0 then
+    cv := sd / mean * 100
+  else
+    cv := 0;
+  gmi := 3.31 + 0.02392 * mean;       // Bergenstal et al., mean in mg/dL
+
+  // Readings actually seen against what the interval promises. Uploaders that
+  // beat their nominal interval would push this over 100%, which reads as an
+  // error rather than as good coverage.
+  expected := span div interval;
+  if expected < 1 then
+    expected := 1;
+  coverage := round(n / expected * 100);
+  if coverage > 100 then
+    coverage := 100;
+
+  core := gApi.cgm;
+  hasTop := core.top <> TrndiAPI.CGM_RANGE_HI_DISABLED;
+  hasBottom := core.bottom <> TrndiAPI.CGM_RANGE_LO_DISABLED;
+  if hasTop then
+    inHi := core.top
+  else
+    inHi := core.hi;
+  if hasBottom then
+    inLo := core.bottom
+  else
+    inLo := core.lo;
+
+  // A bare time is enough within a day; longer windows need the date. The
+  // start of the period is dated a bit sooner, since a 24 h window puts it on
+  // the day before.
+  if hours > 24 then
+    timeFmt := 'yyyy-mm-dd hh:nn'
+  else
+    timeFmt := 'hh:nn';
+  if hours > 12 then
+    sinceFmt := 'yyyy-mm-dd hh:nn'
+  else
+    sinceFmt := 'hh:nn';
+  u := BG_UNIT_NAMES[gUnit];
+
+  writeln(Format('Stats — last %d h — %s', [hours, gApi.systemName]));
+  // Where the data actually starts, so a window the backend could not fill —
+  // capped fetch, sensor change, a fresh site — shows up as more than a low
+  // coverage figure.
+  writeln(Format('%d readings since %s, %d%% coverage at a %d min interval',
+    [n, FormatDateTime(sinceFmt, oldest), coverage, interval]));
+  writeln;
+  writeln(Format('  Average   %7s %s', [FmtBG(mean), u]));
+  writeln(Format('  Std dev   %7s %s  (CV %.1f%%)', [FmtBG(sd), u, cv]));
+  writeln(Format('  GMI       %7.1f %%  (%.0f mmol/mol)',
+    [gmi, (gmi - 2.15) * 10.929]));
+  writeln(Format('  Lowest    %7s %s  at %s',
+    [FmtBG(minV), u, FormatDateTime(timeFmt, minAt)]));
+  writeln(Format('  Highest   %7s %s  at %s',
+    [FmtBG(maxV), u, FormatDateTime(timeFmt, maxAt)]));
+  writeln;
+
+  // Five bands when a personal target range is configured, three when the
+  // backend only reports hard high/low limits (the sublevels stay empty then).
+  if hasTop then
+  begin
+    StatRow('Very high', '>' + FmtBG(core.hi), counts[BGHigh], n, interval);
+    StatRow('High', FmtBG(core.top) + '-' + FmtBG(core.hi),
+      counts[BGRangeHI], n, interval);
+  end
+  else
+    StatRow('High', '>' + FmtBG(core.hi), counts[BGHigh], n, interval);
+
+  StatRow('In range', FmtBG(inLo) + '-' + FmtBG(inHi), counts[BGRange], n,
+    interval);
+
+  if hasBottom then
+  begin
+    StatRow('Low', FmtBG(core.lo) + '-' + FmtBG(core.bottom),
+      counts[BGRangeLO], n, interval);
+    StatRow('Very low', '<' + FmtBG(core.lo), counts[BGLOW], n, interval);
+  end
+  else
+    StatRow('Low', '<' + FmtBG(core.lo), counts[BGLOW], n, interval);
+end;
+
+{------------------------------------------------------------------------------
   Entry point
  ------------------------------------------------------------------------------}
 
@@ -498,37 +710,98 @@ begin
   writeln('Usage: trndi-cli [OPTION]');
   writeln('Prints the current CGM reading from the backend configured in Trndi.');
   writeln;
-  writeln('  -g, --graph   interactive TUI with a reading graph (F5 refreshes)');
-  writeln('  -h, --help    show this help');
+  writeln('  -g, --graph     interactive TUI with a reading graph (F5 refreshes)');
+  writeln(Format('  -s, --stats [H] summarise the last H hours (default %d, max %d)',
+    [STATS_DEFAULT_HOURS, STATS_MAX_HOURS]));
+  writeln('  -h, --help      show this help');
+end;
+
+function IsNumeric(const s: string): boolean;
+var
+  x: integer;
+begin
+  Result := s <> '';
+  for x := 1 to Length(s) do
+    if not (s[x] in ['0'..'9']) then
+      exit(false);
+end;
+
+procedure BadUsage(const msg: string);
+begin
+  writeln(stderr, msg);
+  Usage;
+  halt(64);
 end;
 
 var
   i: integer;
+  arg, val: string;
+  eq: SizeInt;
   graphMode: boolean = false;
+  statsMode: boolean = false;
+  statsHours: integer = STATS_DEFAULT_HOURS;
 begin
   OnGetApplicationName := @TrndiAppName;
 
-  for i := 1 to ParamCount do
-    case ParamStr(i) of
+  i := 1;
+  while i <= ParamCount do
+  begin
+    arg := ParamStr(i);
+    val := '';
+    eq := Pos('=', arg);
+    if eq > 0 then
+    begin
+      val := Copy(arg, eq + 1, MaxInt);
+      arg := Copy(arg, 1, eq - 1);
+    end;
+
+    case arg of
     '-g', '--graph':
       graphMode := true;
+    '-s', '--stats':
+    begin
+      statsMode := true;
+      // Both "--stats 12" and "--stats=12" set the window. A bare --stats
+      // keeps the default, so only swallow a following argument that is a
+      // number — anything else is the next option.
+      if (val = '') and (i < ParamCount) and IsNumeric(ParamStr(i + 1)) then
+      begin
+        val := ParamStr(i + 1);
+        Inc(i);
+      end;
+      if val <> '' then
+        if (not IsNumeric(val)) or (not TryStrToInt(val, statsHours)) or
+          (statsHours < 1) or (statsHours > STATS_MAX_HOURS) then
+          BadUsage(Format('--stats takes a number of hours between 1 and %d, got "%s".',
+            [STATS_MAX_HOURS, val]));
+    end;
     '-h', '--help':
     begin
       Usage;
       halt(0);
     end;
     else
-    begin
-      writeln(stderr, 'Unknown option: ', ParamStr(i));
-      Usage;
-      halt(64);
+      BadUsage('Unknown option: ' + ParamStr(i));
     end;
-    end;
+    Inc(i);
+  end;
+
+  if graphMode and statsMode then
+    BadUsage('--graph and --stats cannot be combined.');
+
+{$IFDEF WINDOWS}
+  // The reading line and the stats bars are UTF-8; the console needs telling.
+  // Graph mode is left alone — Free Vision drives the console itself there.
+  if not graphMode then
+    SetConsoleOutputCP(CP_UTF8);
+{$ENDIF}
 
   ConnectBackend;
   try
     if graphMode then
       RunGraph
+    else if statsMode then
+      RunStats(statsHours)
     else
       RunOnce;
   finally

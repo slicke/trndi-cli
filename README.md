@@ -28,11 +28,33 @@ With `--graph`, a Free Vision text UI shows the last hours as a bar graph — re
  Alt-X Exit  F5 Refresh
 ```
 
+With `--stats` it summarises a period instead — average, spread, GMI and the time-in-range bands, taken from the same thresholds the graph colors use:
+
+```
+$ trndi-cli --stats
+Stats — last 24 h — NightScout v3
+287 readings since 2026-08-15 23:10, 100% coverage at a 5 min interval
+
+  Average      10.4 mmol/L
+  Std dev       3.4 mmol/L  (CV 32.6%)
+  GMI           7.8 %  (62 mmol/mol)
+  Lowest        5.6 mmol/L  at 07:40
+  Highest      18.3 mmol/L  at 19:35
+
+  Very high     >14.4  ███░░░░░░░░░░░░░░░░░  15%  3 h 30 min
+  High      10.0-14.4  ███████░░░░░░░░░░░░░  35%  8 h 25 min
+  In range   4.4-10.0  ██████████░░░░░░░░░░  50%  12 h
+  Low         3.1-4.4  ░░░░░░░░░░░░░░░░░░░░   0%  0 min
+  Very low       <3.1  ░░░░░░░░░░░░░░░░░░░░   0%  0 min
+```
+
 ## Usage
 
 ```
 trndi-cli             print the current reading and exit
 trndi-cli --graph     interactive TUI graph (F5 refresh, Alt-X exit)
+trndi-cli --stats     summarise the last 24 h
+trndi-cli --stats 6   ... or any window from 1 to 168 hours
 trndi-cli --help      options
 ```
 

@@ -7,6 +7,7 @@ trndi-cli reads the settings the [Trndi](https://github.com/slicke/trndi) GUI sa
 - [Linux](#linux)
 - [Windows](#windows)
 - [Backends](#backends)
+- [Stats thresholds](#stats-thresholds)
 - [Troubleshooting](#troubleshooting)
 
 ## What trndi-cli reads
@@ -69,6 +70,20 @@ trndi-cli's HTTP transport on Windows is libcurl, so `libcurl.dll` must be in `P
 
 The GUI's display names (e.g. `NightScout`) are also accepted, but the codes above are the stable form.
 
+## Stats thresholds
+
+`--stats` splits the period into bands using the thresholds the backend itself
+reports — nothing about them is configured in trndi-cli. On Nightscout they are
+the site's own settings: `bgTargetBottom`/`bgTargetTop` bound the in-range band,
+`bgLow`/`bgHigh` the very low/very high ones. Backends that report only a hard
+high and low (xDrip, for instance) get a three-band breakdown instead of five.
+
+Percentages are shares of the readings in the period, and each band's duration
+is its share counted at the backend's reporting interval. The `coverage` figure
+compares the readings actually fetched with what an unbroken stream at that
+interval would have given, so gaps — sensor changes, a backend that caps how far
+back it will serve — show up there and in the "readings since" timestamp.
+
 ## Troubleshooting
 
 trndi-cli exits with a distinct code and a message on stderr:
@@ -78,7 +93,8 @@ trndi-cli exits with a distinct code and a message on stderr:
 | `1` | No backend configured | Set `remote.type` as described above |
 | `2` | Unknown backend | Check `remote.type` against the table |
 | `3` | Connection failed | Message includes the backend's error — check address/credentials |
-| `4` | No recent reading | Backend reachable but silent > 24 h — check the uploader |
+| `4` | No recent reading | Backend reachable but silent > 24 h (with `--stats`: nothing in the requested window) — check the uploader |
+| `64` | Bad command line | Unknown option, or a `--stats` window outside 1–168 hours |
 
 **Windows: "libcurl.dll was not found"** — this pops up before trndi-cli even runs; see the note under [Windows](#windows).
 
