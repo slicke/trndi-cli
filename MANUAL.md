@@ -123,8 +123,15 @@ trndi-cli exits with a distinct code and a message on stderr:
 | `1` | No backend configured | Run `trndi-cli --setup`, or set `remote.type` as described above |
 | `2` | Unknown backend | Check `remote.type` against the table |
 | `3` | Connection failed | Message includes the backend's error — check address/credentials |
-| `4` | No recent reading | Backend reachable but silent > 24 h (with `--stats`: nothing in the requested window) — check the uploader |
+| `4` | No recent reading | Backend reachable but silent > 24 h (with `--stats`: nothing in the requested window; with `--check`: also a stale fallback, so scripts never alarm on old data) — check the uploader |
+| `5` | Above the high threshold | Only from `--check` — an answer, not an error |
+| `6` | Below the low threshold | Only from `--check` — an answer, not an error |
 | `64` | Bad command line | Unknown option, a `--stats` window outside 1–168 hours, or `--setup` without a terminal |
+
+`--check` prints the same line as a plain run; the exit code uses the backend's
+own thresholds, the ones the graph colors and `--stats` bands come from. A
+personal target range narrower than the hard limits does not trip it — like the
+graph, only red and blue count.
 
 **Windows: "libcurl.dll was not found"** — this pops up before trndi-cli even runs; see the note under [Windows](#windows).
 

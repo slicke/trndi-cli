@@ -41,7 +41,8 @@
   trend arrow and delta, then exits. With --graph it opens a Free Vision TUI
   showing the reading and a block-character graph, refreshing every 5 minutes
   (F5 forces a refresh). With --stats it summarises a period of history:
-  average, variability, GMI and the time-in-range distribution.
+  average, variability, GMI and the time-in-range distribution. With --check
+  the exit code carries where the reading sits: 0 in range, 5 high, 6 low.
 
   Settings are read from the GUI's config (~/.config/Trndi.cfg on Linux), so
   a machine with a configured Trndi needs no setup.
@@ -863,7 +864,13 @@ begin
     writeln('Settings unchanged.');
 end;
 
-procedure RunOnce;
+// The one-shot print. With check the exit code carries where the reading
+// sits — 0 in range, 5 above the high threshold, 6 below the low one — so a
+// script can alarm without parsing the line. The bands match the graph
+// colors: the personal-limit sublevels count as in range, as they draw green.
+// A stale fallback keeps exit 4; a cron job polling every few minutes should
+// not alarm on hours-old data.
+procedure RunOnce(check: boolean);
 begin
   FetchCurrent;
   if not gHaveCurrent then
@@ -872,6 +879,18 @@ begin
     halt(4);
   end;
   writeln(CurrentLine);
+  if (not check) or gStale then
+  begin
+    if check then
+      halt(4);
+    exit;
+  end;
+  case gApi.getLevel(gCurrent.convert(mgdl)) of
+  BGHigh:
+    halt(5);
+  BGLOW:
+    halt(6);
+  end;
 end;
 
 procedure Usage;
@@ -879,6 +898,7 @@ begin
   writeln('Usage: trndi-cli [OPTION]');
   writeln('Prints the current CGM reading from the backend configured in Trndi.');
   writeln;
+  writeln('  -c, --check      as above, with the range in the exit code: 5 high, 6 low');
   writeln('  -g, --graph      interactive TUI with a reading graph (F5 refreshes)');
   writeln(Format('  -s, --stats [H]  summarise the last H hours (default %d, max %d)',
     [STATS_DEFAULT_HOURS, STATS_MAX_HOURS]));
@@ -911,6 +931,7 @@ var
   graphMode: boolean = false;
   statsMode: boolean = false;
   setupMode: boolean = false;
+  checkMode: boolean = false;
   statsHours: integer = STATS_DEFAULT_HOURS;
 begin
   OnGetApplicationName := @TrndiAppName;
@@ -947,6 +968,8 @@ begin
           BadUsage(Format('--stats takes a number of hours between 1 and %d, got "%s".',
             [STATS_MAX_HOURS, val]));
     end;
+    '-c', '--check':
+      checkMode := true;
     '--no-predict':
       gPredictEnabled := false;
     '--setup':
@@ -966,6 +989,8 @@ begin
     BadUsage('--graph and --stats cannot be combined.');
   if setupMode and (graphMode or statsMode) then
     BadUsage('--setup cannot be combined with --graph or --stats.');
+  if checkMode and (graphMode or statsMode or setupMode) then
+    BadUsage('--check cannot be combined with --graph, --stats or --setup.');
 
 {$IFDEF WINDOWS}
   // The reading line and the stats bars are UTF-8; the console needs telling.
@@ -989,7 +1014,7 @@ begin
     else if statsMode then
       RunStats(statsHours)
     else
-      RunOnce;
+      RunOnce(checkMode);
   finally
     gApi.Free;
   end;

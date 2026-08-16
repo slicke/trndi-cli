@@ -31,6 +31,7 @@ With `--stats` it summarises a period instead — average, spread, GMI and the t
 
 ```
 trndi-cli               print the current reading and exit
+trndi-cli --check       ... with the range in the exit code, for scripts
 trndi-cli --graph       interactive TUI graph (F5 refresh, F6 forecast, F9 settings, Alt-X exit)
 trndi-cli --no-predict  ... with the forecast hidden from the start
 trndi-cli --stats       summarise the last 24 h
@@ -39,7 +40,11 @@ trndi-cli --setup       settings window: backend, address, secret, unit
 trndi-cli --help        options
 ```
 
-Exit codes: `0` OK · `1` not configured · `2` unknown backend · `3` connection failed · `4` no recent reading.
+Exit codes: `0` OK · `1` not configured · `2` unknown backend · `3` connection failed · `4` no recent reading. `--check` adds `5` above the high threshold and `6` below the low one — the same thresholds the graph colors use — so a cron job can alarm without parsing the output:
+
+```bash
+trndi-cli --check >/dev/null; [ $? -eq 6 ] && notify-send -u critical "Low glucose"
+```
 
 ## Building
 
