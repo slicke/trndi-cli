@@ -79,3 +79,6 @@ jobs:
           # No settings in CI: the unconfigured case must exit 1, not crash.
           .\bin\trndi-cli.exe
           if ($LASTEXITCODE -ne 1) { throw "expected exit 1 when unconfigured, got $LASTEXITCODE" }
+          # The pwsh step inherits the last native exit code — the 1 above is
+          # the expected outcome, not a failure.
+          exit 0
