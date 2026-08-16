@@ -25,4 +25,12 @@ debug: src/trndicli.pas
 clean:
 	rm -rf build bin
 
-.PHONY: all debug clean
+# Tab completion for bash, zsh and fish, into the standard system directories.
+PREFIX ?= /usr/local
+
+install-completions:
+	install -Dm644 completions/trndi-cli.bash $(DESTDIR)$(PREFIX)/share/bash-completion/completions/trndi-cli
+	install -Dm644 completions/_trndi-cli $(DESTDIR)$(PREFIX)/share/zsh/site-functions/_trndi-cli
+	install -Dm644 completions/trndi-cli.fish $(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/trndi-cli.fish
+
+.PHONY: all debug clean install-completions

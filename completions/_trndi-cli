@@ -1,0 +1,18 @@
+#compdef trndi-cli
+# Zsh completion for trndi-cli.
+# Install: copy to a directory in $fpath, e.g. /usr/share/zsh/site-functions/.
+# `make install-completions` does the copy.
+#
+# Keep the option list in step with Usage in src/trndicli.pas. The exclusion
+# lists mirror the "cannot be combined" checks there: one mode per run.
+
+local -a modes
+modes=(-c --check -g --graph -s --stats --setup)
+
+_arguments -s \
+  "($modes)"{-c,--check}'[print the reading, with the range in the exit code: 5 high, 6 low]' \
+  "($modes)"{-g,--graph}'[interactive TUI with a reading graph (F5 refreshes)]' \
+  "($modes)"{-s,--stats}'[summarise the last H hours (default 24)]::hours (1-168):' \
+  '--no-predict[graph mode: start without the forecast (F6 toggles)]' \
+  "($modes)--setup[settings window: backend, address, secret, unit]" \
+  '(- *)'{-h,--help}'[show help]'

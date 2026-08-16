@@ -893,6 +893,7 @@ begin
   end;
 end;
 
+// A new option added here also goes in the three files under completions/.
 procedure Usage;
 begin
   writeln('Usage: trndi-cli [OPTION]');
