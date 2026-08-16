@@ -41,4 +41,12 @@ install-completions:
 	install -d $(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d
 	install -m 644 completions/trndi-cli.fish $(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/trndi-cli.fish
 
-.PHONY: all debug clean install install-completions
+# Remove what install put there. The share/ directories stay: they are the
+# shells' own, not ours.
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/trndi-cli
+	rm -f $(DESTDIR)$(PREFIX)/share/bash-completion/completions/trndi-cli
+	rm -f $(DESTDIR)$(PREFIX)/share/zsh/site-functions/_trndi-cli
+	rm -f $(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/trndi-cli.fish
+
+.PHONY: all debug clean install install-completions uninstall
