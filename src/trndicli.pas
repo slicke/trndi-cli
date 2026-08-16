@@ -273,7 +273,8 @@ const
 var
   B: TDrawBuffer;
   y, x, i, gh, gw, halves, first: integer;
-  minV, maxV, pad, v: double;
+  minV, maxV, pad, v, step, band, rowTop, tick: double;
+  isTick: boolean;
   lbl: string;
   attrBar: byte;
 begin
@@ -321,17 +322,29 @@ begin
       maxV := v;
   end;
   if gUnit = mmol then
-    pad := 0.3
+  begin
+    pad := 0.3;
+    step := 5;   // legend tick every 5 mmol/L
+  end
   else
+  begin
     pad := 6;
+    step := 50;  // ... and every 50 mg/dL
+  end;
   minV := minV - pad;
   maxV := maxV + pad;
+  band := (maxV - minV) / gh;
 
   for y := 1 to Size.Y - 1 do
   begin
     MoveChar(B, ' ', attrText, Size.X);
 
-    // Scale labels on the top and bottom graph rows
+    // Does a multiple of the legend step fall inside this row's value band?
+    rowTop := maxV - (y - 1) * band;
+    tick := Trunc(rowTop / step) * step;
+    isTick := (y > 1) and (y < Size.Y - 1) and (tick > rowTop - band);
+
+    // Scale labels: exact bounds on the edge rows, legend steps between
     if (y = 1) or (y = Size.Y - 1) then
     begin
       if y = 1 then
@@ -343,8 +356,21 @@ begin
       else
         lbl := Format('%6.0f', [v]);
       MoveStr(B, lbl, attrLabel);
+    end
+    else if isTick then
+    begin
+      lbl := Format('%6.0f', [tick]);
+      MoveStr(B, lbl, attrLabel);
     end;
     MoveChar(B[MARGIN - 1], '|', attrLabel, 1);
+
+    // Dotted gridline under the bars on legend rows
+    if isTick then
+    begin
+      MoveChar(B[MARGIN - 1], '+', attrLabel, 1);
+      for x := 0 to gw - 1 do
+        MoveChar(B[MARGIN + x], #250, attrLabel, 1);
+    end;
 
     // Bars: value mapped to half-block steps from the bottom
     for x := 0 to gw - 1 do
