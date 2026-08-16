@@ -127,64 +127,6 @@ end;
 {$ENDIF}
 
 {------------------------------------------------------------------------------
-  Level colors
- ------------------------------------------------------------------------------}
-
-// Bar colors follow the range classification, seeded with the GUI's
-// configured colors (ux.bg_color_*) mapped to the console palette — so a
-// high value renders in the same color family as the GUI shows it.
-var
-  gLvlAttr: array[BGValLevel] of byte = (
-    $16,  // BGRangeHI: brown (within range, above personal limit)
-    $13,  // BGRangeLO: cyan (within range, below personal limit)
-    $1A,  // BGRange:   light green
-    $1E,  // BGHigh:    yellow
-    $1C   // BGLOW:     light red
-    );
-
-const
-  // Classic VGA console palette as {r,g,b}, indexed by attribute color 0-15.
-  VGA: array[0..15] of array[0..2] of byte = (
-    (0, 0, 0), (0, 0, 170), (0, 170, 0), (0, 170, 170),
-    (170, 0, 0), (170, 0, 170), (170, 85, 0), (170, 170, 170),
-    (85, 85, 85), (85, 85, 255), (85, 255, 85), (85, 255, 255),
-    (255, 85, 85), (255, 85, 255), (255, 255, 85), (255, 255, 255));
-
-// Nearest console color to a TColor ($00BBGGRR). Blue (1) is excluded — it
-// is the canvas the bars stand on.
-function NearestConsoleColor(rgb: longint): byte;
-var
-  i, d, best, r, g, b: integer;
-begin
-  r := rgb and $FF;
-  g := (rgb shr 8) and $FF;
-  b := (rgb shr 16) and $FF;
-  best := MaxInt;
-  Result := 15;
-  for i := 0 to 15 do
-    if i <> 1 then
-    begin
-      d := sqr(r - VGA[i][0]) + sqr(g - VGA[i][1]) + sqr(b - VGA[i][2]);
-      if d < best then
-      begin
-        best := d;
-        Result := i;
-      end;
-    end;
-end;
-
-// Take a GUI color setting into the level→attribute table when it is set.
-procedure LoadLevelColor(native: TCliNative; const key: string; lvl: BGValLevel);
-var
-  s: string;
-  c: longint;
-begin
-  s := native.GetSetting(key);
-  if (s <> '') and TryStrToInt(s, c) and (c >= 0) then
-    gLvlAttr[lvl] := $10 or NearestConsoleColor(c);
-end;
-
-{------------------------------------------------------------------------------
   Data access
  ------------------------------------------------------------------------------}
 
@@ -204,13 +146,6 @@ begin
       gUnit := mmol
     else
       gUnit := mgdl;
-
-    // The GUI's configured range colors, translated to console attributes.
-    LoadLevelColor(native, 'ux.bg_color_ok', BGRange);
-    LoadLevelColor(native, 'ux.bg_color_hi', BGHigh);
-    LoadLevelColor(native, 'ux.bg_color_lo', BGLOW);
-    LoadLevelColor(native, 'ux.bg_rel_color_hi', BGRangeHI);
-    LoadLevelColor(native, 'ux.bg_rel_color_lo', BGRangeLO);
   finally
     native.Free;
   end;
@@ -313,15 +248,25 @@ type
 var
   GraphWin: PBGWindow = nil;
 
+// Fixed three-color scheme on a black canvas: red high, green in range,
+// blue low. The terminal driver only emits the 8 base colors (no intensity),
+// so anything subtler lands wherever the terminal theme happens to put it.
 function LevelAttr(lvl: BGValLevel): byte;
 begin
-  Result := gLvlAttr[lvl];
+  case lvl of
+  BGHigh:
+    Result := $04;  // red on black
+  BGLOW:
+    Result := $01;  // blue on black
+  else
+    Result := $02;  // green on black (incl. the personal-limit sublevels)
+  end;
 end;
 
 procedure TBGGraphView.Draw;
 const
-  attrText = $1F;   // white on blue
-  attrLabel = $1B;  // light cyan on blue
+  attrText = $0F;   // white on black
+  attrLabel = $07;  // gray on black
   chFull = #219;    // CP437 full block (video unit maps to Unicode)
   chHalf = #220;    // CP437 lower half block
   MARGIN = 8;       // room for scale labels: "  12.3 |"
