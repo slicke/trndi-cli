@@ -49,7 +49,18 @@ jobs:
           path: trndi-cli-linux-${{ matrix.arch }}
 
   freebsd:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - vmarch: x86_64
+            arch: amd64
+          # aarch64 runs under plain qemu emulation on the x86 host (vmactions
+          # recommends against ARM hosts), so it is markedly slower.
+          - vmarch: aarch64
+            arch: arm64
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,6 +73,7 @@ jobs:
         uses: vmactions/freebsd-vm@v1
         with:
           usesh: true
+          arch: ${{ matrix.vmarch }}
           prepare: |
             pkg install -y gmake curl fpc
             pkg install -y $(pkg search -x -q '^fpc-' | sed 's/-[0-9][^ ]*$//' | sort -u)
@@ -74,11 +86,11 @@ jobs:
 
       # vmactions copies the workspace back out of the VM after `run`.
       - name: Upload binary
-        run: cp bin/trndi-cli trndi-cli-freebsd-amd64
+        run: cp bin/trndi-cli trndi-cli-freebsd-${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:
-          name: trndi-cli-freebsd-amd64
-          path: trndi-cli-freebsd-amd64
+          name: trndi-cli-freebsd-${{ matrix.arch }}
+          path: trndi-cli-freebsd-${{ matrix.arch }}
 
   windows:
     runs-on: windows-latest
