@@ -59,7 +59,7 @@ SysUtils, DateUtils,
 {$IFDEF WINDOWS}
 Windows,
 {$ENDIF}
-App, Objects, Drivers, Views, Menus, FVConsts,
+App, Objects, Drivers, Views, Menus, FVConsts, Video,
 trndi.native, trndi.native.console,
 trndi.api, trndi.api.registry, trndi.types, trndi.funcs.core,
 trndicli.settings;
@@ -508,6 +508,9 @@ var
   gv: PBGGraphView;
 begin
   inherited Init(R, 'Trndi', wnNoNumber);
+  // The window fills the desktop and has to keep doing so when the terminal
+  // changes size under it (see TTrndiTui.Idle).
+  GrowMode := gfGrowHiX + gfGrowHiY;
   GetExtent(IR);
   IR.Grow(-1, -1);
   gv := New(PBGGraphView, Init(IR));
@@ -599,8 +602,18 @@ begin
 end;
 
 procedure TTrndiTui.Idle;
+var
+  mode: TVideoMode;
 begin
   inherited Idle;
+  // A terminal resized under the graph: relayout every view from the
+  // application down. The window and the status line follow through their
+  // grow modes.
+  if ScreenSizeChanged(mode) then
+  begin
+    SetScreenVideoMode(mode);
+    Redraw;
+  end;
   if GetTickCount64 - gLastFetch >= POLL_INTERVAL_MS then
   begin
     FetchAll;

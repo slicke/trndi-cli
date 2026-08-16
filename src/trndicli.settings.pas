@@ -58,7 +58,7 @@ interface
 
 uses
 Classes, SysUtils,
-Objects, Drivers, Views, Dialogs, App, Menus, MsgBox, FVConsts,
+Objects, Drivers, Views, Dialogs, App, Menus, MsgBox, FVConsts, Video,
 trndi.native.console, trndi.api.registry;
 
 type
@@ -93,6 +93,13 @@ function RunSetup: boolean;
     must never end up waiting at a full-screen window nobody can see. }
 function ConsoleIsInteractive: boolean;
 
+{** True when the terminal's size no longer matches what Free Vision believes
+    it is, with the video mode FV should be switched to. FV asks the terminal
+    once, at startup, and never again, so a window resized under a running TUI
+    leaves the layout — status line and frame included — off the screen.
+    Unix only; always false elsewhere. }
+function ScreenSizeChanged(out mode: TVideoMode): boolean;
+
 {** Message boxes for callers outside this unit (graph mode reports a failed
     reconnect this way — stderr is not available with FV on the screen). }
 procedure ShowInfo(const msg: string);
@@ -104,7 +111,7 @@ uses
 {$IFDEF WINDOWS}
 registry, Windows,
 {$ELSE}
-termio,
+BaseUnix, termio,
 {$ENDIF}
 trndi.api, trndi.types;
 
@@ -227,6 +234,31 @@ begin
   finally
     native.Free;
   end;
+end;
+
+function ScreenSizeChanged(out mode: TVideoMode): boolean;
+{$IFDEF UNIX}
+var
+  ws: TWinSize;
+{$ENDIF}
+begin
+  Result := false;
+  FillChar(mode, SizeOf(mode), 0);
+{$IFDEF UNIX}
+  if fpIOCtl(StdInputHandle, TIOCGWINSZ, @ws) <> 0 then
+    exit;
+  // FV addresses at most FVMaxWidth columns and keeps the width in a byte, so
+  // a wider terminal already runs clipped; handing the video unit a mode it
+  // would refuse is worse than leaving well alone.
+  if (ws.ws_col < 20) or (ws.ws_row < 5) or (ws.ws_col > FVMaxWidth) then
+    exit;
+  if (ws.ws_col = ScreenWidth) and (ws.ws_row = ScreenHeight) then
+    exit;
+  mode := ScreenMode;
+  mode.col := ws.ws_col;
+  mode.row := ws.ws_row;
+  Result := true;
+{$ENDIF}
 end;
 
 function ConsoleIsInteractive: boolean;
@@ -627,6 +659,7 @@ type
   TSetupApp = object(TApplication)
     procedure InitMenuBar; virtual;
     procedure InitStatusLine; virtual;
+    procedure Idle; virtual;
   end;
 
 procedure TSetupApp.InitMenuBar;
@@ -648,6 +681,19 @@ begin
       NewStatusKey('~Esc~ Cancel', kbNoKey, 0,
       nil))),
     nil)));
+end;
+
+// Follow the terminal when it is resized under the window, as graph mode does.
+procedure TSetupApp.Idle;
+var
+  mode: TVideoMode;
+begin
+  inherited Idle;
+  if ScreenSizeChanged(mode) then
+  begin
+    SetScreenVideoMode(mode);
+    Redraw;
+  end;
 end;
 
 function RunSetup: boolean;
