@@ -48,17 +48,15 @@ jobs:
           name: trndi-cli-linux-${{ matrix.arch }}
           path: trndi-cli-linux-${{ matrix.arch }}
 
+  # No aarch64 leg: FreeBSD's package builders do not ship fpc for aarch64
+  # (the port is amd64/i386-only), verified 2026-08-16 — the VM's pkg install
+  # finds nothing. Revisit if lang/fpc ever gains ONLY_FOR_ARCHS aarch64.
   freebsd:
     strategy:
-      fail-fast: false
       matrix:
         include:
           - vmarch: x86_64
             arch: amd64
-          # aarch64 runs under plain qemu emulation on the x86 host (vmactions
-          # recommends against ARM hosts), so it is markedly slower.
-          - vmarch: aarch64
-            arch: arm64
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
