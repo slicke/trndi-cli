@@ -47,7 +47,7 @@ up from either side. Three things worth knowing:
 - **Test** connects with the values on screen without saving them. It costs one
   request, and the window sits still until the backend answers.
 
-The window needs a terminal of at least 68x20, and a terminal at all: with
+The window needs a terminal of at least 68x19, and a terminal at all: with
 input or output redirected, `--setup` refuses (exit 64) and an unconfigured run
 falls back to the message and exit 1.
 

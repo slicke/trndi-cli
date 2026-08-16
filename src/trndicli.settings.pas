@@ -118,7 +118,7 @@ trndi.api, trndi.types;
 const
   cmTest = 1100;                        // "Test" button inside the dialog
   DLG_W = 68;                           // the window needs this much terminal
-  DLG_H = 19;                           // ... and this many rows
+  DLG_H = 18;                           // ... and this many rows
   FIELD_MAX = 255;                      // TInputLine data is a shortstring
 
 type
@@ -506,6 +506,15 @@ begin
   Insert(lineCreds);
   R.Assign(34, 4, 65, 5);
   Insert(New(PLabel, Init(R, '~S~ecret / password', lineCreds)));
+  // Directly under the field, because an empty field that nevertheless
+  // connects is otherwise a puzzle: the stored secret is never loaded into
+  // it, and leaving it alone is how you keep that secret.
+  if cur.creds <> '' then
+    note := 'Stored - type to replace'
+  else
+    note := 'No secret stored';
+  R.Assign(35, 6, 65, 7);
+  Insert(New(PStaticText, Init(R, note)));
 
   // Unit
   R.Assign(34, 8, 65, 10);
@@ -520,27 +529,21 @@ begin
   hint := New(PStaticText, Init(R, ''));
   Insert(hint);
 
-  if cur.creds <> '' then
-    note := 'The secret is stored - leave the field empty to keep it.'
-  else
-    note := 'No secret stored yet.';
-  R.Assign(3, 13, 65, 14);
-  Insert(New(PStaticText, Init(R, note)));
   // A long path is one unbreakable word to TStaticText, which would drop it
   // rather than wrap it — keep the tail, which is the telling part.
   loc := SettingsLocation;
   if Length(loc) > 52 then
     loc := '...' + Copy(loc, Length(loc) - 48, MaxInt);
-  R.Assign(3, 14, 65, 15);
+  R.Assign(3, 13, 65, 14);
   Insert(New(PStaticText, Init(R, 'Saved in ' + loc)));
 
   // Buttons: Test connects with the values on screen without saving them.
   // Equal widths, right edge lined up with the fields above.
-  R.Assign(30, 16, 41, 17);
+  R.Assign(30, 15, 41, 16);
   Insert(New(PDlgButton, Init(R, '~O~K', cmOK, bfDefault)));
-  R.Assign(42, 16, 53, 17);
+  R.Assign(42, 15, 53, 16);
   Insert(New(PDlgButton, Init(R, '~T~est', cmTest, bfNormal)));
-  R.Assign(54, 16, 65, 17);
+  R.Assign(54, 15, 65, 16);
   Insert(New(PDlgButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
 
   // Fill in the current configuration. Debug backends are left out: they
