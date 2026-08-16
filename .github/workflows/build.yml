@@ -152,11 +152,34 @@ jobs:
           architecture: x86-64
           shell: bash
 
+      # HaikuPorts' r1beta5 route is currently dead: the front end redirects to
+      # a CDN that carries only master, and answers the repochecksum request
+      # with a 2-byte JSON listing, so pkgman's refresh fails and it then 404s
+      # on the package its cached index asked for. The same fpc revision does
+      # exist under master, so fall back to fetching that file. Drop the
+      # fallback once the mirror is whole again.
       - name: Install Free Pascal
-        run: pkgman install -y fpc devel:libcurl
+        run: |
+          if ! pkgman install -y fpc devel:libcurl; then
+            curl -fL -o /tmp/fpc.hpkg \
+              https://haikuports-repository.cdn.haiku-os.org/master/x86_64/current/packages/fpc-3.2.2-5-x86_64.hpkg
+            pkgman install -y /tmp/fpc.hpkg
+          fi
+
+      # curl_devel is what normally provides the unversioned libcurl.so the
+      # bindings name; with the repo down, give the linker a symlink to the
+      # versioned library that ships with the base system instead.
+      - name: Point the linker at libcurl
+        run: |
+          mkdir -p /boot/home/config/non-packaged/lib
+          for l in /boot/system/lib/libcurl.so.*; do
+            ln -sf "$l" /boot/home/config/non-packaged/lib/libcurl.so
+            break
+          done
+          ls -l /boot/home/config/non-packaged/lib/
 
       - name: Build
-        run: make
+        run: make FPCEXTRA='-Fl/boot/home/config/non-packaged/lib'
 
       - name: Smoke test
         run: |
