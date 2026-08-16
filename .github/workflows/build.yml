@@ -33,6 +33,13 @@ jobs:
           set -e
           test "$code" -eq 1
 
+      - name: Upload binary
+        run: cp bin/trndi-cli trndi-cli-linux-amd64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trndi-cli-linux-amd64
+          path: trndi-cli-linux-amd64
+
   freebsd:
     runs-on: ubuntu-latest
     steps:
@@ -56,6 +63,14 @@ jobs:
             ./bin/trndi-cli --help
             code=0; ./bin/trndi-cli || code=$?
             [ "$code" -eq 1 ]
+
+      # vmactions copies the workspace back out of the VM after `run`.
+      - name: Upload binary
+        run: cp bin/trndi-cli trndi-cli-freebsd-amd64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trndi-cli-freebsd-amd64
+          path: trndi-cli-freebsd-amd64
 
   windows:
     runs-on: windows-latest
@@ -106,3 +121,49 @@ jobs:
           # The pwsh step inherits the last native exit code — the 1 above is
           # the expected outcome, not a failure.
           exit 0
+
+      - name: Upload binary
+        shell: pwsh
+        run: Copy-Item bin\trndi-cli.exe trndi-cli-windows-x64.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trndi-cli-windows-x64
+          path: trndi-cli-windows-x64.exe
+
+  # ===================== RELEASE =====================
+  # Trndi-style rolling releases: every push to main that builds green on all
+  # platforms becomes tag build-<N> (starting at 100) with the binaries as
+  # release assets.
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [linux, freebsd, windows]
+    runs-on: ubuntu-latest
+    # Two quick pushes must not race the same build number.
+    concurrency: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history *and* tags, for the build counter
+
+      - name: Next build number
+        id: ver
+        run: |
+          LATEST=$(git tag | grep -E '^build-[0-9]+$' | sed 's/^build-//' | sort -n | tail -1)
+          echo "num=$(( ${LATEST:-99} + 1 ))" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NUM=${{ steps.ver.outputs.num }}
+          gh release create "build-${NUM}" \
+            --target "$GITHUB_SHA" \
+            --title "Build ${NUM}" \
+            --notes "Automated build of ${GITHUB_SHA}. Setup: see MANUAL.md — Windows also needs libcurl.dll (README)." \
+            dist/*/*
