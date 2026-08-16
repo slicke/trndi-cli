@@ -65,8 +65,10 @@ trndi.api, trndi.api.registry, trndi.types, trndi.funcs.core;
 const
   cmRefresh = 1000;                   // FV user command for F5/refresh
   POLL_INTERVAL_MS = 5 * 60 * 1000;   // graph mode refetch cadence
-  GRAPH_SPAN_MIN = 180;               // minutes of history in the graph
-  GRAPH_MAX_READINGS = 60;
+  // Fetch more than any reasonable terminal is wide (one column per
+  // reading); Draw shows the newest readings that fit the window.
+  GRAPH_SPAN_MIN = 480;               // minutes of history in the graph
+  GRAPH_MAX_READINGS = 480;           // covers 8 h even for 1-min uploaders
 
 type
   {** The console native resolves settings to GetAppConfigDir + trndi.ini,
