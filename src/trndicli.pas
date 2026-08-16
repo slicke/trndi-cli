@@ -55,6 +55,9 @@ cthreads, // MUST be first: trndi.native.async starts a worker thread; without
           // a thread driver the RTL aborts with RE 232 (uncatchable).
 {$ENDIF}
 SysUtils, DateUtils,
+{$IFDEF WINDOWS}
+registry,
+{$ENDIF}
 App, Objects, Drivers, Views, Menus, FVConsts,
 trndi.native, trndi.native.console,
 trndi.api, trndi.api.registry, trndi.types, trndi.funcs.core;
@@ -67,13 +70,19 @@ const
 
 type
   {** The console native resolves settings to GetAppConfigDir + trndi.ini,
-      but the Linux GUI stores them via GetAppConfigFile (~/.config/Trndi.cfg).
-      Point the INI path at the GUI's file so both front ends share config;
+      but the GUI stores them elsewhere: on Linux via GetAppConfigFile
+      (~/.config/Trndi.cfg), on Windows in HKCU\SOFTWARE\Trndi. Read the GUI's
+      store on both so a configured GUI is all the setup needed;
       OnGetApplicationName makes ApplicationName = 'Trndi' regardless of this
       binary's file name. }
   TCliNative = class(TTrndiNativeConsole)
   protected
     function ResolveIniPath: string; override;
+  public
+{$IFDEF WINDOWS}
+    function GetSetting(const keyname: string; def: string = '';
+      global: boolean = false): string; override;
+{$ENDIF}
   end;
 
 var
@@ -95,6 +104,27 @@ function TCliNative.ResolveIniPath: string;
 begin
   Result := GetAppConfigFile(false);
 end;
+
+{$IFDEF WINDOWS}
+// The Windows GUI keeps settings in the registry, not an INI — read the same
+// values (HKCU\SOFTWARE\Trndi, value names like 'remote.type').
+function TCliNative.GetSetting(const keyname: string; def: string;
+global: boolean): string;
+var
+  reg: TRegistry;
+begin
+  Result := def;
+  reg := TRegistry.Create;
+  try
+    reg.RootKey := HKEY_CURRENT_USER;
+    if reg.OpenKeyReadOnly('\SOFTWARE\Trndi\') then
+      if reg.ValueExists(keyname) then
+        Result := reg.ReadString(keyname);
+  finally
+    reg.Free;
+  end;
+end;
+{$ENDIF}
 
 {------------------------------------------------------------------------------
   Data access
@@ -122,8 +152,13 @@ begin
 
   if remoteType = '' then
   begin
+{$IFDEF WINDOWS}
+    writeln(stderr, 'No backend configured. Run the Trndi GUI setup first ' +
+      '(no remote.type in HKCU\SOFTWARE\Trndi).');
+{$ELSE}
     writeln(stderr, 'No backend configured. Run the Trndi GUI setup first ' +
       '(no remote.type in ', GetAppConfigFile(false), ').');
+{$ENDIF}
     halt(1);
   end;
 

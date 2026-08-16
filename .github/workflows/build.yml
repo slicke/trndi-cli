@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  build:
+  linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,3 +32,50 @@ jobs:
           code=$?
           set -e
           test "$code" -eq 1
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # Same toolchain source as trndi's own CI: the Lazarus installer bundles
+      # fpc 3.2.2 at C:\Lazarus\fpc\..., which make.ps1 already looks for.
+      # curl.exe (not the Invoke-WebRequest alias) because SourceForge
+      # content-negotiates on User-Agent; the MZ check makes a mirror that
+      # answers 200 with an HTML page fail loudly here instead of at install.
+      - name: Install FPC (Lazarus bundle)
+        shell: pwsh
+        run: |
+          curl.exe -L --fail -o lazarus.exe "https://sourceforge.net/projects/lazarus/files/Lazarus%20Windows%2064%20bits/Lazarus%204.8/lazarus-4.8-fpc-3.2.2-win64.exe/download"
+          $fs = [System.IO.File]::OpenRead('lazarus.exe')
+          $mz = New-Object byte[] 2
+          $null = $fs.Read($mz, 0, 2)
+          $fs.Close()
+          if (($mz[0] -ne 0x4D) -or ($mz[1] -ne 0x5A)) {
+            throw 'lazarus.exe is not a Windows executable - the mirror likely returned a web page.'
+          }
+          Start-Process '.\lazarus.exe' -ArgumentList '/VERYSILENT','/SP-','/NORESTART','/DIR=C:\Lazarus' -Wait
+
+      - name: Build
+        shell: pwsh
+        run: .\make.ps1
+
+      # The exe imports libcurl.dll at load time (console-native HTTP
+      # transport), so the smoke test needs it beside the binary. The official
+      # curl-for-Windows package names it libcurl-x64.dll; the import table
+      # wants libcurl.dll, hence the rename.
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          curl.exe -L --fail -o curlpkg.zip 'https://curl.se/windows/latest.cgi?p=win64-mingw.zip'
+          Expand-Archive curlpkg.zip -DestinationPath curlpkg
+          $dll = Get-ChildItem curlpkg -Recurse -Filter libcurl-x64.dll | Select-Object -First 1
+          if (-not $dll) { throw 'libcurl-x64.dll not found in curl package' }
+          Copy-Item $dll.FullName bin\libcurl.dll
+          .\bin\trndi-cli.exe --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # No settings in CI: the unconfigured case must exit 1, not crash.
+          .\bin\trndi-cli.exe
+          if ($LASTEXITCODE -ne 1) { throw "expected exit 1 when unconfigured, got $LASTEXITCODE" }
