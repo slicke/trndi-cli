@@ -280,7 +280,7 @@ var
   lbl: string;
   attrBar: byte;
 begin
-  gh := Size.Y - 1; // row 0 is the header line
+  gh := Size.Y - 2; // row 0 is the header, the last row the time legend
   gw := Size.X - MARGIN;
 
   // Header
@@ -337,17 +337,17 @@ begin
   maxV := maxV + pad;
   band := (maxV - minV) / gh;
 
-  for y := 1 to Size.Y - 1 do
+  for y := 1 to Size.Y - 2 do
   begin
     MoveChar(B, ' ', attrText, Size.X);
 
     // Does a multiple of the legend step fall inside this row's value band?
     rowTop := maxV - (y - 1) * band;
     tick := Trunc(rowTop / step) * step;
-    isTick := (y > 1) and (y < Size.Y - 1) and (tick > rowTop - band);
+    isTick := (y > 1) and (y < Size.Y - 2) and (tick > rowTop - band);
 
     // Scale labels: exact bounds on the edge rows, legend steps between
-    if (y = 1) or (y = Size.Y - 1) then
+    if (y = 1) or (y = Size.Y - 2) then
     begin
       if y = 1 then
         v := maxV
@@ -393,6 +393,19 @@ begin
     end;
     WriteLine(0, y, Size.X, 1, B);
   end;
+
+  // Time legend: the reading time under every 15th column
+  MoveChar(B, ' ', attrLabel, Size.X);
+  x := 0;
+  while x + 5 <= gw do
+  begin
+    i := first + x;
+    if i > High(gReadings) then
+      break;
+    MoveStr(B[MARGIN + x], FormatDateTime('hh:nn', gReadings[i].date), attrLabel);
+    Inc(x, 15);
+  end;
+  WriteLine(0, Size.Y - 1, Size.X, 1, B);
 end;
 
 constructor TBGWindow.Init(var R: TRect);
