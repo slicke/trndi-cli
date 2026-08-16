@@ -65,11 +65,16 @@ trndi.api, trndi.api.registry, trndi.types, trndi.funcs.core;
 
 const
   cmRefresh = 1000;                   // FV user command for F5/refresh
+  cmPredict = 1001;                   // ... and for F6/forecast toggle
   POLL_INTERVAL_MS = 5 * 60 * 1000;   // graph mode refetch cadence
   // Fetch more than any reasonable terminal is wide (one column per
   // reading); Draw shows the newest readings that fit the window.
   GRAPH_SPAN_MIN = 480;               // minutes of history in the graph
   GRAPH_MAX_READINGS = 480;           // covers 8 h even for 1-min uploaders
+  // Half an hour ahead, matching the GUI's overlay. The model knows nothing
+  // about insulin or carbs, so a longer horizon would only look precise.
+  PREDICT_COUNT = 6;
+  PREDICT_MIN_CONF = 0.5;             // below this the fit is not worth drawing
 
 type
   {** The console native resolves settings to GetAppConfigDir + trndi.ini,
@@ -97,6 +102,11 @@ var
   gReadings: BGResults = nil;
   gLastFetch: QWord = 0;
   gStatus: string = '';
+  gPredictions: BGResults = nil;
+  gPredictEnabled: boolean = true;
+  gPredictOK: boolean = false;
+  gPredictConf: double = 0;
+  gPredictStable: boolean = false;
 
 function TrndiAppName: string;
 begin
@@ -216,12 +226,32 @@ begin
       [MinutesBetween(Now, gCurrent.date)]);
 end;
 
-// Graph mode data: history plus the current reading.
+// predictReadings runs a history fetch of its own, so it costs a second
+// request per refresh — only spend it when the main fetch produced something.
+// A backend that just failed will not forecast either, and LibreLinkUp in
+// particular is unhappy about needless calls.
+procedure FetchPredictions;
+begin
+  gPredictOK := false;
+  gPredictConf := 0;
+  gPredictStable := false;
+  SetLength(gPredictions, 0);
+  if (not gPredictEnabled) or (Length(gReadings) = 0) then
+    exit;
+  gPredictOK := gApi.predictReadings(PREDICT_COUNT, gPredictions);
+  // Snapshot right away: both properties describe the most recent
+  // predictReadings call on the shared api object.
+  gPredictConf := gApi.predictionConfidence;
+  gPredictStable := gApi.stablePrediction;
+end;
+
+// Graph mode data: history, the current reading and the forecast.
 procedure FetchAll;
 begin
   FetchCurrent;
   gReadings := gApi.getReadings(GRAPH_SPAN_MIN, GRAPH_MAX_READINGS);
   SortReadingsAscending(gReadings);
+  FetchPredictions;
   gLastFetch := GetTickCount64;
   gStatus := 'updated ' + FormatDateTime('hh:nn:ss', Now);
 end;
@@ -266,29 +296,82 @@ begin
   end;
 end;
 
+// How many forecast columns to draw: none when the user turned it off, when
+// the backend could not produce one, when the trend is flat (a straight line
+// ahead says nothing) or when the fit was too noisy to be worth showing.
+function PredictColumns: integer;
+begin
+  if (not gPredictEnabled) or (not gPredictOK) or gPredictStable or
+    (gPredictConf < PREDICT_MIN_CONF) then
+    exit(0);
+  Result := Length(gPredictions);
+end;
+
 procedure TBGGraphView.Draw;
 const
   attrText = $0F;   // white on black
   attrLabel = $07;  // gray on black
   chFull = #219;    // CP437 full block (video unit maps to Unicode)
   chHalf = #220;    // CP437 lower half block
+  // The forecast reuses the bar geometry but a lighter texture, so it reads as
+  // the same measurement drawn weaker rather than as a different thing. Color
+  // stays free to mean level, as it does for the history.
+  chPredFull = #177;  // CP437 medium shade
+  chPredHalf = #176;  // CP437 light shade, as the half step
+  chDivider = #179;   // CP437 vertical line: the "now" boundary
   MARGIN = 8;       // room for scale labels: "  12.3 |"
 var
   B: TDrawBuffer;
-  y, x, i, gh, gw, halves, first: integer;
+  y, x, i, gh, gw, first, pn, histW, horizon: integer;
   minV, maxV, pad, v, step, band, rowTop, tick: double;
   isTick: boolean;
   lbl: string;
-  attrBar: byte;
+
+  // Map a value onto the current row's half-steps and emit the right glyph.
+  procedure PlotCell(col: integer; value: double; attr: byte; full, half: char);
+  var
+    halves: integer;
+  begin
+    halves := round((value - minV) / (maxV - minV) * gh * 2);
+    if halves < 1 then
+      halves := 1;
+    // Row y covers half-steps (gh-y)*2+1 .. (gh-y)*2+2 counted from the bottom
+    if halves >= (gh - y + 1) * 2 then
+      MoveChar(B[col], full, attr, 1)
+    else if halves = (gh - y) * 2 + 1 then
+      MoveChar(B[col], half, attr, 1);
+  end;
+
 begin
   gh := Size.Y - 2; // row 0 is the header, the last row the time legend
   gw := Size.X - MARGIN;
+
+  // Split the plot between history and forecast. The forecast never takes
+  // more than a quarter of the width: on a narrow window shorten the horizon
+  // rather than crowd out measured data, and drop it entirely once even that
+  // leaves too little to be worth a divider.
+  pn := PredictColumns;
+  if pn > gw div 4 then
+    pn := gw div 4;
+  if pn < 2 then
+    pn := 0;
+  if pn > 0 then
+    histW := gw - pn - 1      // one column for the divider
+  else
+    histW := gw;
 
   // Header
   MoveChar(B, ' ', attrText, Size.X);
   lbl := ' ' + CurrentLine(false);
   if gStatus <> '' then
     lbl := lbl + '  -  ' + gStatus;
+  if (pn > 0) and (Length(gReadings) > 0) then
+  begin
+    horizon := round((gPredictions[pn - 1].date - gReadings[High(gReadings)].date)
+      * 24 * 60);
+    lbl := lbl + Format('  -  %s +%d min %.0f%%',
+      [chPredFull, horizon, gPredictConf * 100]);
+  end;
   MoveStr(B, Copy(lbl, 1, Size.X), attrText);
   WriteLine(0, 0, Size.X, 1, B);
 
@@ -308,17 +391,26 @@ begin
     exit;
   end;
 
-  // Newest readings on the right; one column per reading.
-  first := Length(gReadings) - gw;
+  // Newest readings to the left of the divider; one column per reading.
+  first := Length(gReadings) - histW;
   if first < 0 then
     first := 0;
 
-  // Scale across what is shown, padded so bars never touch the edges.
+  // Scale across everything drawn, forecast included so it cannot clip,
+  // padded so bars never touch the edges.
   minV := gReadings[first].convert(gUnit);
   maxV := minV;
   for i := first to High(gReadings) do
   begin
     v := gReadings[i].convert(gUnit);
+    if v < minV then
+      minV := v;
+    if v > maxV then
+      maxV := v;
+  end;
+  for i := 0 to pn - 1 do
+  begin
+    v := gPredictions[i].convert(gUnit);
     if v < minV then
       minV := v;
     if v > maxV then
@@ -376,29 +468,35 @@ begin
     end;
 
     // Bars: value mapped to half-block steps from the bottom
-    for x := 0 to gw - 1 do
+    for x := 0 to histW - 1 do
     begin
       i := first + x;
       if i > High(gReadings) then
         break;
-      v := gReadings[i].convert(gUnit);
-      attrBar := LevelAttr(gApi.getLevel(gReadings[i].convert(mgdl)));
-      halves := round((v - minV) / (maxV - minV) * gh * 2);
-      if halves < 1 then
-        halves := 1;
-      // Row y covers half-steps (gh-y)*2+1 .. (gh-y)*2+2 counted from the bottom
-      if halves >= (gh - y + 1) * 2 then
-        MoveChar(B[MARGIN + x], chFull, attrBar, 1)
-      else if halves = (gh - y) * 2 + 1 then
-        MoveChar(B[MARGIN + x], chHalf, attrBar, 1);
+      PlotCell(MARGIN + x, gReadings[i].convert(gUnit),
+        LevelAttr(gApi.getLevel(gReadings[i].convert(mgdl))), chFull, chHalf);
+    end;
+
+    // Forecast, past the "now" divider: same geometry and level colors, drawn
+    // in shade rather than solid so it cannot be read as measured data.
+    if pn > 0 then
+    begin
+      MoveChar(B[MARGIN + histW], chDivider, attrLabel, 1);
+      for x := 0 to pn - 1 do
+        PlotCell(MARGIN + histW + 1 + x, gPredictions[x].convert(gUnit),
+          LevelAttr(gApi.getLevel(gPredictions[x].convert(mgdl))),
+          chPredFull, chPredHalf);
     end;
     WriteLine(0, y, Size.X, 1, B);
   end;
 
-  // Time legend: the reading time under every 15th column
+  // Time legend: the reading time under every 15th column. Only under the
+  // history — the forecast's own times are implied by the horizon in the
+  // header, and a future clock time under a shaded bar invites reading it as
+  // an appointment.
   MoveChar(B, ' ', attrLabel, Size.X);
   x := 0;
-  while x + 5 <= gw do
+  while x + 5 <= histW do
   begin
     i := first + x;
     if i > High(gReadings) then
@@ -442,7 +540,8 @@ begin
     NewStatusDef(0, $FFFF,
       NewStatusKey('~Alt-X~ Exit', kbAltX, cmQuit,
       NewStatusKey('~F5~ Refresh', kbF5, cmRefresh,
-      nil)),
+      NewStatusKey('~F6~ Forecast', kbF6, cmPredict,
+      nil))),
     nil)));
 end;
 
@@ -452,6 +551,17 @@ begin
   if (Event.What = evCommand) and (Event.Command = cmRefresh) then
   begin
     FetchAll;
+    if GraphWin <> nil then
+      GraphWin^.Redraw;
+    ClearEvent(Event);
+  end
+  else if (Event.What = evCommand) and (Event.Command = cmPredict) then
+  begin
+    gPredictEnabled := not gPredictEnabled;
+    // Turning it back on mid-session has nothing to draw yet, so pay for the
+    // fetch here rather than leaving the key press look like it did nothing.
+    if gPredictEnabled and (not gPredictOK) then
+      FetchPredictions;
     if GraphWin <> nil then
       GraphWin^.Redraw;
     ClearEvent(Event);
@@ -710,10 +820,11 @@ begin
   writeln('Usage: trndi-cli [OPTION]');
   writeln('Prints the current CGM reading from the backend configured in Trndi.');
   writeln;
-  writeln('  -g, --graph     interactive TUI with a reading graph (F5 refreshes)');
-  writeln(Format('  -s, --stats [H] summarise the last H hours (default %d, max %d)',
+  writeln('  -g, --graph      interactive TUI with a reading graph (F5 refreshes)');
+  writeln(Format('  -s, --stats [H]  summarise the last H hours (default %d, max %d)',
     [STATS_DEFAULT_HOURS, STATS_MAX_HOURS]));
-  writeln('  -h, --help      show this help');
+  writeln('      --no-predict graph mode: start without the forecast (F6 toggles)');
+  writeln('  -h, --help       show this help');
 end;
 
 function IsNumeric(const s: string): boolean;
@@ -775,6 +886,8 @@ begin
           BadUsage(Format('--stats takes a number of hours between 1 and %d, got "%s".',
             [STATS_MAX_HOURS, val]));
     end;
+    '--no-predict':
+      gPredictEnabled := false;
     '-h', '--help':
     begin
       Usage;

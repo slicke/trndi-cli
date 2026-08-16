@@ -16,17 +16,23 @@ $ trndi-cli
 With `--graph`, a Free Vision text UI shows the last hours as a bar graph — red above your high threshold, blue below the low one, green in range — refreshed every 5 minutes:
 
 ```
-╔═[■]══════════════════════ Trndi ═══════════════════════╗
-║ 11.6 mmol/L -> (-0.7)  22:20  -  updated 22:23:21      ║
-║  18.6 |                  ▄▄██▄                          ║
-║    15 +················██████████▄·····················║
-║       |             ▄███████████████▄        ▄██▄       ║
-║    10 +··▄█▄▄██▄██████████████████████▄▄···█████████···║
-║   6.2 |█████████████████████████████████████████████   ║
-║        14:55         16:10         17:25         18:40 ║
-╚═════════════════════════════════════════════════════════╝
- Alt-X Exit  F5 Refresh
+╔═[■]═══════════════════════════════ Trndi ════════════════════════════════[↕]═╗
+║ 10.5 mmol/L -> (+-0.0)  23:15  -  updated 23:22:02  -  ▒ +30 min 61%         ║
+║  18.6 |               ▄▄▄▄▄▄                                          │      ║
+║       |             ▄██████████▄                                      │      ║
+║       |      ▄▄██████████████████▄                                    │      ║
+║    15 +····▄█████████████████████████▄································│······║
+║       |   █████████████████████████████▄         ▄▄                   │      ║
+║       | ▄███████████████████████████████▄▄     █████▄▄                │      ║
+║       |▄███████████████████████████████████▄▄▄████████▄               │      ║
+║       |███████████████████████████████████████████████████████        │      ║
+║   9.8 |████████████████████████████████████████████████████████▄▄▄▄███│░░░░▒▒║
+║        18:05          19:20          20:35          21:50                    ║
+╚═════════════════════════════════════════════════════════════════════════════─┘
+ Alt-X Exit  F5 Refresh  F6 Forecast
 ```
+
+Past the `│` divider is a half-hour forecast, drawn in shade rather than solid so it never reads as measured data. It comes from Trndi's own prediction model — a robust weighted regression with a curvature term — and appears only when the fit is worth showing: a flat trend or a noisy sensor leaves it out entirely, and the header carries the horizon and the model's own confidence. `F6` toggles it, `--no-predict` starts without it. It knows nothing about insulin or carbs, so treat it as the shape of the last half hour continued, not a plan.
 
 With `--stats` it summarises a period instead — average, spread, GMI and the time-in-range bands, taken from the same thresholds the graph colors use:
 
@@ -51,11 +57,12 @@ Stats — last 24 h — NightScout v3
 ## Usage
 
 ```
-trndi-cli             print the current reading and exit
-trndi-cli --graph     interactive TUI graph (F5 refresh, Alt-X exit)
-trndi-cli --stats     summarise the last 24 h
-trndi-cli --stats 6   ... or any window from 1 to 168 hours
-trndi-cli --help      options
+trndi-cli               print the current reading and exit
+trndi-cli --graph       interactive TUI graph (F5 refresh, F6 forecast, Alt-X exit)
+trndi-cli --no-predict  ... with the forecast hidden from the start
+trndi-cli --stats       summarise the last 24 h
+trndi-cli --stats 6     ... or any window from 1 to 168 hours
+trndi-cli --help        options
 ```
 
 Exit codes: `0` OK · `1` not configured · `2` unknown backend · `3` connection failed · `4` no recent reading.
