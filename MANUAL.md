@@ -45,6 +45,8 @@ reg add HKCU\SOFTWARE\Trndi /v remote.creds  /t REG_SZ /d my-api-secret
 reg add HKCU\SOFTWARE\Trndi /v unit          /t REG_SZ /d mmol
 ```
 
+trndi-cli's HTTP transport on Windows is libcurl, so `libcurl.dll` must be in `PATH` or next to `trndi-cli.exe`. Download the official [curl for Windows](https://curl.se/windows/) package and rename its `bin\libcurl-x64.dll` to `libcurl.dll`. Without it the exe does not start at all (Windows reports a missing DLL before any trndi-cli code runs).
+
 ## Backends
 
 `remote.type` takes one of Trndi's stable backend codes. What `remote.target` and `remote.creds` mean depends on the backend:
@@ -77,6 +79,8 @@ trndi-cli exits with a distinct code and a message on stderr:
 | `2` | Unknown backend | Check `remote.type` against the table |
 | `3` | Connection failed | Message includes the backend's error — check address/credentials |
 | `4` | No recent reading | Backend reachable but silent > 24 h — check the uploader |
+
+**Windows: "libcurl.dll was not found"** — this pops up before trndi-cli even runs; see the note under [Windows](#windows).
 
 A reading older than ~10 minutes is still printed, marked `[stale, N min old]`.
 
