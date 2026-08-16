@@ -1,0 +1,4 @@
+[submodule "vendor/trndi"]
+	path = vendor/trndi
+	url = git@github.com:slicke/trndi.git
+	branch = develop
