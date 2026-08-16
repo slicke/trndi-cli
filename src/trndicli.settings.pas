@@ -118,7 +118,7 @@ trndi.api, trndi.types;
 const
   cmTest = 1100;                        // "Test" button inside the dialog
   DLG_W = 68;                           // the window needs this much terminal
-  DLG_H = 20;
+  DLG_H = 19;                           // ... and this many rows
   FIELD_MAX = 255;                      // TInputLine data is a shortstring
 
 type
@@ -352,6 +352,17 @@ begin
 end;
 
 type
+  {** A button that says so when it has the focus. Free Vision marks the
+      focused button by colour alone — white text instead of black on the same
+      green — which is easy to miss when tabbing along a row of them. Arrows
+      make it plain. The buttons are also a single row high, which drops the
+      block-character shadow TButton draws under a two-row one: on a row of
+      three buttons that shadow was the loudest thing in the dialog. }
+  PDlgButton = ^TDlgButton;
+  TDlgButton = object(TButton)
+    procedure Draw; virtual;
+  end;
+
   {** An input line that draws asterisks. The secret is never loaded into the
       field, but what the user types would otherwise stand on the screen. }
   PSecretLine = ^TSecretLine;
@@ -386,6 +397,26 @@ type
     function CredsValue: string;
     procedure TestConnection;
   end;
+
+procedure TDlgButton.Draw;
+const
+  chLeft = #16;                         // CP437 ► / ◄, as Turbo Vision marks
+  chRight = #17;                        // its default button
+var
+  B: TDrawBuffer;
+  attr: byte;
+begin
+  inherited Draw;
+  // sfSelected alone is the group's remembered choice; it only means "has the
+  // focus" while the dialog itself is active.
+  if (State and (sfSelected + sfActive)) <> (sfSelected + sfActive) then
+    exit;
+  attr := lo(GetColor($0703));          // the focused-button colour
+  MoveChar(B, chLeft, attr, 1);
+  WriteLine(0, 0, 1, 1, B);
+  MoveChar(B, chRight, attr, 1);
+  WriteLine(Size.X - 2, 0, 1, 1, B);
+end;
 
 procedure TSecretLine.Draw;
 var
@@ -504,12 +535,13 @@ begin
   Insert(New(PStaticText, Init(R, 'Saved in ' + loc)));
 
   // Buttons: Test connects with the values on screen without saving them.
-  R.Assign(30, 16, 40, 18);
-  Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
-  R.Assign(41, 16, 51, 18);
-  Insert(New(PButton, Init(R, '~T~est', cmTest, bfNormal)));
-  R.Assign(52, 16, 65, 18);
-  Insert(New(PButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
+  // Equal widths, right edge lined up with the fields above.
+  R.Assign(30, 16, 41, 17);
+  Insert(New(PDlgButton, Init(R, '~O~K', cmOK, bfDefault)));
+  R.Assign(42, 16, 53, 17);
+  Insert(New(PDlgButton, Init(R, '~T~est', cmTest, bfNormal)));
+  R.Assign(54, 16, 65, 17);
+  Insert(New(PDlgButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
 
   // Fill in the current configuration. Debug backends are left out: they
   // serve synthetic data, and picking one here would look like a real choice.
