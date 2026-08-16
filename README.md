@@ -1,3 +1,5 @@
+<img src="doc/img/trndi-cli.png" alt="" width="120" align="right">
+
 [![Build](https://github.com/slicke/trndi-cli/actions/workflows/build.yml/badge.svg)](https://github.com/slicke/trndi-cli/actions/workflows/build.yml) [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 # trndi-cli - Trndi in your terminal
@@ -15,44 +17,15 @@ $ trndi-cli
 
 With `--graph`, a Free Vision text UI shows the last hours as a bar graph — red above your high threshold, blue below the low one, green in range — refreshed every 5 minutes:
 
-```
-╔═[■]═══════════════════════════════ Trndi ════════════════════════════════[↕]═╗
-║ 10.5 mmol/L -> (+-0.0)  23:15  -  updated 23:22:02  -  ▒ +30 min 61%         ║
-║  18.6 |               ▄▄▄▄▄▄                                          │      ║
-║       |             ▄██████████▄                                      │      ║
-║       |      ▄▄██████████████████▄                                    │      ║
-║    15 +····▄█████████████████████████▄································│······║
-║       |   █████████████████████████████▄         ▄▄                   │      ║
-║       | ▄███████████████████████████████▄▄     █████▄▄                │      ║
-║       |▄███████████████████████████████████▄▄▄████████▄               │      ║
-║       |███████████████████████████████████████████████████████        │      ║
-║   9.8 |████████████████████████████████████████████████████████▄▄▄▄███│░░░░▒▒║
-║        18:05          19:20          20:35          21:50                    ║
-╚═════════════════════════════════════════════════════════════════════════════─┘
- Alt-X Exit  F5 Refresh  F6 Forecast  F9 Settings
-```
+![The graph mode: eight hours of readings as coloured bars, with a shaded forecast past the divider on the right](doc/img/graph.png)
 
-Past the `│` divider is a half-hour forecast, drawn in shade rather than solid so it never reads as measured data. It comes from Trndi's own prediction model — a robust weighted regression with a curvature term — and appears only when the fit is worth showing: a flat trend or a noisy sensor leaves it out entirely, and the header carries the horizon and the model's own confidence. `F6` toggles it, `--no-predict` starts without it. It knows nothing about insulin or carbs, so treat it as the shape of the last half hour continued, not a plan.
+`F5` refetches, `F9` opens the settings window and `Alt-X` leaves; the key bar sits along the bottom of the terminal.
+
+Past the divider on the right is a half-hour forecast, drawn in shade rather than solid so it never reads as measured data. It comes from Trndi's own prediction model — a robust weighted regression with a curvature term — and appears only when the fit is worth showing: a flat trend or a noisy sensor leaves it out entirely, and the header carries the horizon and the model's own confidence. `F6` toggles it, `--no-predict` starts without it. It knows nothing about insulin or carbs, so treat it as the shape of the last half hour continued, not a plan.
 
 With `--stats` it summarises a period instead — average, spread, GMI and the time-in-range bands, taken from the same thresholds the graph colors use:
 
-```
-$ trndi-cli --stats
-Stats — last 24 h — NightScout v3
-287 readings since 2026-08-15 23:10, 100% coverage at a 5 min interval
-
-  Average      10.4 mmol/L
-  Std dev       3.4 mmol/L  (CV 32.6%)
-  GMI           7.8 %  (62 mmol/mol)
-  Lowest        5.6 mmol/L  at 07:40
-  Highest      18.3 mmol/L  at 19:35
-
-  Very high     >14.4  ███░░░░░░░░░░░░░░░░░  15%  3 h 30 min
-  High      10.0-14.4  ███████░░░░░░░░░░░░░  35%  8 h 25 min
-  In range   4.4-10.0  ██████████░░░░░░░░░░  50%  12 h
-  Low         3.1-4.4  ░░░░░░░░░░░░░░░░░░░░   0%  0 min
-  Very low       <3.1  ░░░░░░░░░░░░░░░░░░░░   0%  0 min
-```
+![The --stats output: average, standard deviation, GMI, extremes and a five-band time-in-range breakdown with bars](doc/img/stat.png)
 
 ## Usage
 
@@ -96,22 +69,22 @@ Configured Trndi GUI = done. Without the GUI, `--setup` opens a settings window 
 ║   NightScout                ▲    https://my.nightscout.site      ║
 ║   NightScout v3             ■                                    ║
 ║   Dexcom (USA)              ▒    Secret / password               ║
-║   Dexcom (Outside USA)      ▒    ******                          ║
-║   Dexcom New (USA)          ▒                                    ║
+║   Dexcom (Outside USA)      ▒                                    ║
+║   Dexcom New (USA)          ▒    Stored - type to replace        ║
 ║   Dexcom New (Outside USA)  ▒    Unit                            ║
 ║   Dexcom New (Japan)        ▒    (*) mmol/L                      ║
 ║   Tandem t:connect (USA)    ▼    ( ) mg/dL                       ║
 ║                                                                  ║
 ║  Address: the Nightscout site URL. Secret: API secret or access  ║
 ║   token.                                                         ║
-║  No secret stored yet.                                           ║
 ║  Saved in /home/you/.config/Trndi.cfg                            ║
 ║                                                                  ║
-║                                 OK       Test      Cancel        ║
+║                                 OK      ►  Test  ◄    Cancel     ║
+║                                                                  ║
 ╚══════════════════════════════════════════════════════════════════╝
 ```
 
-It writes exactly what the GUI reads, in the place the GUI reads it, so the two stay interchangeable. The values can also be set by hand — see the [manual](MANUAL.md).
+The stored secret is never loaded into its field: leaving it empty keeps it, and what you type is masked. It writes exactly what the GUI reads, in the place the GUI reads it, so the two stay interchangeable. The values can also be set by hand — see the [manual](MANUAL.md).
 
 ## License
 
