@@ -115,6 +115,16 @@ BaseUnix, termio,
 {$ENDIF}
 trndi.api, trndi.types;
 
+{$IFDEF WINDOWS}
+type
+  // The Windows unit is used here for the registry and the console handles,
+  // but it also brings a TRect of its own. An implementation-section uses
+  // clause wins over the interface's, so every rectangle in this unit would
+  // silently become the Win32 one and fail to match Free Vision's. Point the
+  // name back where it belongs.
+  TRect = Objects.TRect;
+{$ENDIF}
+
 const
   cmTest = 1100;                        // "Test" button inside the dialog
   DLG_W = 68;                           // the window needs this much terminal
