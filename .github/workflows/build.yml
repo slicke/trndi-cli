@@ -33,6 +33,30 @@ jobs:
           set -e
           test "$code" -eq 1
 
+  freebsd:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # FreeBSD has no native runner; vmactions boots a FreeBSD VM and rsyncs
+      # the workspace in. FPC's units are split into fpc-* subpackages whose
+      # exact set varies by release, so install every one that exists.
+      - name: Build and smoke test in FreeBSD VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            pkg install -y gmake curl fpc
+            pkg install -y $(pkg search -x -q '^fpc-' | sed 's/-[0-9][^ ]*$//' | sort -u)
+          run: |
+            set -e
+            gmake FPCEXTRA='-Fl/usr/local/lib'
+            ./bin/trndi-cli --help
+            code=0; ./bin/trndi-cli || code=$?
+            [ "$code" -eq 1 ]
+
   windows:
     runs-on: windows-latest
     steps:

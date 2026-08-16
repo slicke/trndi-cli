@@ -4,10 +4,13 @@
 T := vendor/trndi
 FPC ?= fpc
 
+# Extra flags from the environment, e.g. FPCEXTRA='-Fl/usr/local/lib' on BSD.
+FPCEXTRA ?=
+
 UNITDIRS := -Fu$(T)/units/trndi -Fu$(T)/units/trndi/api \
             -Fu$(T)/units/slicke -Fu$(T)/units/misc
 FPCFLAGS := -Mobjfpc -Sh -dX_CONSOLE -dWITHTHREADS $(UNITDIRS) -Fi$(T)/inc \
-            -FUbuild -FEbin -otrndi-cli
+            -FUbuild -FEbin -otrndi-cli $(FPCEXTRA)
 
 all: bin/trndi-cli
 
