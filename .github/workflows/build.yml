@@ -182,8 +182,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           NUM=${{ steps.ver.outputs.num }}
+          # No --target: like trndi, tag whatever main's HEAD is at publish
+          # time. Targeting $GITHUB_SHA 403s as soon as a newer push has
+          # landed, since the API refuses non-head SHAs for the token.
           gh release create "build-${NUM}" \
-            --target "$GITHUB_SHA" \
             --title "Build ${NUM}" \
             --notes "Automated build of ${GITHUB_SHA}. Setup: see MANUAL.md — Windows also needs libcurl.dll (README)." \
             dist/*/*
