@@ -25,10 +25,14 @@ debug: src/trndicli.pas
 clean:
 	rm -rf build bin
 
-# Tab completion for bash, zsh and fish, into the standard system directories.
 PREFIX ?= /usr/local
 
-# Two steps rather than install -D: BSD install has no -D.
+# The binary into $(PREFIX)/bin and the shell completions where bash, zsh and
+# fish look. Two steps rather than install -D: BSD install has no -D.
+install: bin/trndi-cli install-completions
+	install -d $(DESTDIR)$(PREFIX)/bin
+	install -m 755 bin/trndi-cli $(DESTDIR)$(PREFIX)/bin/trndi-cli
+
 install-completions:
 	install -d $(DESTDIR)$(PREFIX)/share/bash-completion/completions
 	install -m 644 completions/trndi-cli.bash $(DESTDIR)$(PREFIX)/share/bash-completion/completions/trndi-cli
@@ -37,4 +41,4 @@ install-completions:
 	install -d $(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d
 	install -m 644 completions/trndi-cli.fish $(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/trndi-cli.fish
 
-.PHONY: all debug clean install-completions
+.PHONY: all debug clean install install-completions

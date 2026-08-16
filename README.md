@@ -64,7 +64,7 @@ Windows (PowerShell, FPC from a [Lazarus](https://www.lazarus-ide.org/) install 
 
 Running on Windows needs `libcurl.dll` ([curl.se/windows](https://curl.se/windows/), rename `libcurl-x64.dll`) next to the exe or in `PATH`.
 
-Tab completion for bash, zsh and fish lives in `completions/`; `sudo make install-completions` puts the files where those shells look (`PREFIX`/`DESTDIR` respected for packagers), or source `completions/trndi-cli.bash` from your `.bashrc`.
+`sudo make install` puts the binary in `/usr/local/bin` together with tab completion for bash, zsh and fish (`PREFIX`/`DESTDIR` respected for packagers). The completions also work on their own: `make install-completions`, or source `completions/trndi-cli.bash` from your `.bashrc`.
 
 ## Configuration
 
