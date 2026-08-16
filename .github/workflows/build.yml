@@ -1,0 +1,34 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # fp-units-fv provides Free Vision; libcurl4-openssl-dev provides the
+      # libcurl.so link name trndi.curl binds against.
+      - name: Install Free Pascal
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fpc fp-units-fv libcurl4-openssl-dev
+
+      - name: Build
+        run: make
+
+      - name: Smoke test
+        run: |
+          ./bin/trndi-cli --help
+          # No settings in CI: the unconfigured case must exit 1, not crash.
+          set +e
+          ./bin/trndi-cli
+          code=$?
+          set -e
+          test "$code" -eq 1
