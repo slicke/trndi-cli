@@ -43,8 +43,10 @@
   (F5 forces a refresh). With --stats it summarises a period of history:
   average, variability, GMI and the time-in-range distribution. With --spark
   the recent history becomes a one-line sparkline, colored by the same
-  thresholds as the graph. With --check the exit code carries where the
-  reading sits: 0 in range, 5 high, 6 low.
+  thresholds as the graph. With --agp (or F7 in graph mode) the last two
+  weeks fold onto one 24-hour axis as a median line with percentile bands —
+  an Ambulatory Glucose Profile. With --check the exit code carries where
+  the reading sits: 0 in range, 5 high, 6 low.
 
   Settings are read from the GUI's config (~/.config/Trndi.cfg on Linux), so
   a machine with a configured Trndi needs no setup.
@@ -75,6 +77,7 @@ const
   cmRefresh = 1000;                   // FV user command for F5/refresh
   cmPredict = 1001;                   // ... and for F6/forecast toggle
   cmSetup = 1002;                     // ... and for F9/settings window
+  cmAGP = 1003;                       // ... and for F7/AGP view toggle
   POLL_INTERVAL_MS = 5 * 60 * 1000;   // graph mode refetch cadence
   // Fetch more than any reasonable terminal is wide (one column per
   // reading); Draw shows the newest readings that fit the window.
@@ -84,6 +87,36 @@ const
   // about insulin or carbs, so a longer horizon would only look precise.
   PREDICT_COUNT = 6;
   PREDICT_MIN_CONF = 0.5;             // below this the fit is not worth drawing
+  // The AGP folds days onto one 24-hour axis, so its window is counted in
+  // days: 14 is the clinical standard, 28 the most any backend serves in one
+  // request (Tandem caps at about four weeks). Below 3 distinct days the
+  // percentiles would just echo single readings, so the chart refuses.
+  AGP_DEFAULT_DAYS = 14;
+  AGP_MIN_DAYS = 3;     // = AGP_MIN_DATA_DAYS: a smaller request cannot succeed
+  AGP_MAX_DAYS = 28;
+  AGP_MIN_DATA_DAYS = 3;
+  // Fixed half-hour time-of-day buckets: 14 days give ~84 samples per bucket,
+  // enough for an honest p5/p95, and the cache is independent of the terminal
+  // width — columns map onto buckets at draw time.
+  AGP_BUCKETS = 48;
+  AGP_BUCKET_MINS = 30;
+
+  // TUI attributes and glyphs, shared by the bar graph and the AGP view.
+  // Raw byte attrs on a black canvas — the terminal driver only emits the 8
+  // base colors. Glyphs are CP437: the FV draw buffer is byte-oriented and
+  // the Video unit maps them to Unicode.
+  attrText = $0F;     // white on black
+  attrLabel = $07;    // gray on black
+  chFull = #219;      // CP437 full block
+  chHalf = #220;      // CP437 lower half block
+  // The forecast reuses the bar geometry but a lighter texture, so it reads as
+  // the same measurement drawn weaker rather than as a different thing. Color
+  // stays free to mean level, as it does for the history. The AGP view leans
+  // on the same scale: solid median, shaded percentile bands.
+  chPredFull = #177;  // CP437 medium shade
+  chPredHalf = #176;  // CP437 light shade, as the half step
+  chDivider = #179;   // CP437 vertical line: the "now" boundary
+  MARGIN = 8;         // room for scale labels: "  12.3 |"
 
 var
   gApi: TrndiAPI = nil;
@@ -107,6 +140,28 @@ var
   // window's left edge instead of walking onto readings that are not drawn.
   gSel: integer = -1;
   gFirstVis: integer = 0;
+
+type
+  // One time-of-day slot of the AGP: how many readings landed there across
+  // all fetched days, and the percentiles over them. All values in mg/dL.
+  TAgpBucket = record
+    n: integer;
+    p5, p25, p50, p75, p95: double;
+  end;
+
+var
+  // The AGP cache, shared by the F7 view and --agp. Fetched lazily (a 14-day
+  // query is far too heavy for the 5-minute poll) and kept until F5, F9 or
+  // exit. gAgpErr carries the reason there is no profile ('' = none yet).
+  gAgpMode: boolean = false;          // TUI: F7 swapped the graph for the AGP
+  gAgp: array[0..AGP_BUCKETS - 1] of TAgpBucket;
+  gAgpValid: boolean = false;
+  gAgpErr: string = '';
+  gAgpDaysReq: integer = AGP_DEFAULT_DAYS;
+  gAgpDaysGot: integer = 0;           // distinct calendar days with data
+  gAgpCount: integer = 0;             // readings that landed in buckets
+  gAgpOldest: TDateTime = 0;
+  gAgpSel: integer = -1;              // bucket cursor, -1 = summary header
 
 function TrndiAppName: string;
 begin
@@ -275,6 +330,26 @@ begin
   gPredictStable := gApi.stablePrediction;
 end;
 
+// getReadings, with the request clamped to Dexcom Share's hard caps on
+// failure: the Dexcom backends raise above (1440 min, 288 readings) rather
+// than serving what they can — nothing else in the API layer throws here —
+// and an unhandled exception would take the whole TUI down with it.
+function FetchReadingsSafe(minutes, maxN: integer): BGResults;
+begin
+  try
+    Result := gApi.getReadings(minutes, maxN);
+  except
+    on Exception do
+    begin
+      if minutes > MinsPerDay then
+        minutes := MinsPerDay;
+      if maxN > 288 then
+        maxN := 288;
+      Result := gApi.getReadings(minutes, maxN);
+    end;
+  end;
+end;
+
 // Graph mode data: history, the current reading and the forecast.
 procedure FetchAll;
 var
@@ -287,7 +362,7 @@ begin
   if (gSel >= 0) and (gSel <= High(gReadings)) then
     selDate := gReadings[gSel].date;
   FetchCurrent;
-  gReadings := gApi.getReadings(GRAPH_SPAN_MIN, GRAPH_MAX_READINGS);
+  gReadings := FetchReadingsSafe(GRAPH_SPAN_MIN, GRAPH_MAX_READINGS);
   SortReadingsAscending(gReadings);
   FetchPredictions;
   gLastFetch := GetTickCount64;
@@ -305,6 +380,175 @@ begin
   end;
 end;
 
+// Thresholds and computed figures are plain mg/dL numbers rather than
+// BGReadings, so BGReading.format is out of reach — format them here instead.
+// Valid for differences (SD) as well: the conversion has no offset.
+function FmtBG(mgdlVal: double): string;
+begin
+  if gUnit = mmol then
+    Result := Format('%.1f', [mgdlVal * TrndiAPI.toMMOL])
+  else
+    Result := Format('%.0f', [mgdlVal]);
+end;
+
+function FmtDuration(mins: integer): string;
+begin
+  if mins < 60 then
+    Result := Format('%d min', [mins])
+  else if mins mod 60 = 0 then
+    Result := Format('%d h', [mins div 60])
+  else
+    Result := Format('%d h %d min', [mins div 60, mins mod 60]);
+end;
+
+{------------------------------------------------------------------------------
+  AGP data: fold days of history onto one 24-hour axis of percentile buckets
+ ------------------------------------------------------------------------------}
+
+// Insertion sort over the first n elements; a bucket holds a few hundred
+// values at most, so anything cleverer would only add code.
+procedure SortDoubles(var a: array of double; n: integer);
+var
+  i, j: integer;
+  v: double;
+begin
+  for i := 1 to n - 1 do
+  begin
+    v := a[i];
+    j := i - 1;
+    while (j >= 0) and (a[j] > v) do
+    begin
+      a[j + 1] := a[j];
+      Dec(j);
+    end;
+    a[j + 1] := v;
+  end;
+end;
+
+// Percentile with linear interpolation (the R-7/spreadsheet definition) over
+// the first n elements of an ascending array. Interpolating rather than
+// taking the nearest rank keeps the bands from jumping in whole-row steps
+// between adjacent buckets. Callers guarantee n >= 1.
+function Percentile(const a: array of double; n: integer; p: double): double;
+var
+  rank: double;
+  lo: integer;
+begin
+  if n = 1 then
+    exit(a[0]);
+  rank := p / 100 * (n - 1);
+  lo := Trunc(rank);
+  if lo >= n - 1 then
+    exit(a[n - 1]);
+  Result := a[lo] + (rank - lo) * (a[lo + 1] - a[lo]);
+end;
+
+// Fetch `days` of history and reduce it to the per-time-of-day percentile
+// buckets in gAgp. Whatever the backend actually served decides gAgpDaysGot;
+// fewer than AGP_MIN_DATA_DAYS distinct days leaves gAgpValid false with the
+// explanation in gAgpErr. Dexcom lands there by construction: even the
+// clamped fallback request cannot reach past its last 24 hours.
+function FetchAgp(days: integer): boolean;
+var
+  readings: BGResults;
+  vals: array[0..AGP_BUCKETS - 1] of array of double;
+  fill: array[0..AGP_BUCKETS - 1] of integer;
+  seen: array[0..AGP_MAX_DAYS] of boolean;
+  cutoff: TDateTime;
+  interval, span, maxN, i, b, d: integer;
+begin
+  Result := false;
+  gAgpValid := false;
+  gAgpErr := '';
+  gAgpSel := -1;
+  interval := gApi.getReportingInterval;
+  if interval < 1 then
+    interval := 5;
+  span := days * MinsPerDay;
+  maxN := span div interval + 16;   // slack for backends counting from "now"
+  try
+    readings := FetchReadingsSafe(span, maxN);
+  except
+    on E: Exception do
+    begin
+      gAgpErr := 'history fetch failed: ' + E.Message;
+      exit;
+    end;
+  end;
+
+  for b := 0 to AGP_BUCKETS - 1 do
+  begin
+    vals[b] := nil;
+    fill[b] := 0;
+    gAgp[b].n := 0;
+  end;
+  for d := 0 to AGP_MAX_DAYS do
+    seen[d] := false;
+
+  // Bucket by local wall-clock time of day — the one DST transition day per
+  // half-year smears a single bucket by an hour, same as printed AGPs do.
+  cutoff := IncMinute(Now, -span);
+  gAgpCount := 0;
+  gAgpOldest := 0;
+  for i := 0 to High(readings) do
+  begin
+    if readings[i].date < cutoff then
+      continue;
+    b := (HourOf(readings[i].date) * 60 + MinuteOf(readings[i].date))
+      div AGP_BUCKET_MINS;
+    if b > AGP_BUCKETS - 1 then
+      b := AGP_BUCKETS - 1;
+    if fill[b] = Length(vals[b]) then
+      SetLength(vals[b], fill[b] + 64);
+    vals[b][fill[b]] := readings[i].convert(mgdl);
+    Inc(fill[b]);
+    Inc(gAgpCount);
+    if (gAgpOldest = 0) or (readings[i].date < gAgpOldest) then
+      gAgpOldest := readings[i].date;
+    // Distinct 24-hour periods since the cutoff, not calendar dates: an
+    // N-day window touches N+1 dates, which would report "N+1 of N days".
+    d := Trunc(readings[i].date - cutoff);
+    if (d >= 0) and (d <= AGP_MAX_DAYS) then
+      seen[d] := true;
+  end;
+
+  gAgpDaysGot := 0;
+  for d := 0 to AGP_MAX_DAYS do
+    if seen[d] then
+      Inc(gAgpDaysGot);
+
+  // A profile over one or two days would just echo single readings dressed
+  // up as percentiles. Dexcom Share, LibreLinkUp and CareLink land here:
+  // their services only serve the last day or so of history.
+  if gAgpCount = 0 then
+  begin
+    gAgpErr := Format('no readings in the last %d days', [days]);
+    exit;
+  end;
+  if gAgpDaysGot < AGP_MIN_DATA_DAYS then
+  begin
+    gAgpErr := Format('backend returned %s of history; AGP needs %d days',
+      [FmtDuration(round((Now - gAgpOldest) * MinsPerDay)), AGP_MIN_DATA_DAYS]);
+    exit;
+  end;
+
+  for b := 0 to AGP_BUCKETS - 1 do
+    if fill[b] > 0 then
+    begin
+      SortDoubles(vals[b], fill[b]);
+      gAgp[b].n := fill[b];
+      gAgp[b].p5 := Percentile(vals[b], fill[b], 5);
+      gAgp[b].p25 := Percentile(vals[b], fill[b], 25);
+      gAgp[b].p50 := Percentile(vals[b], fill[b], 50);
+      gAgp[b].p75 := Percentile(vals[b], fill[b], 75);
+      gAgp[b].p95 := Percentile(vals[b], fill[b], 95);
+    end;
+
+  gAgpDaysReq := days;
+  gAgpValid := true;
+  Result := true;
+end;
+
 {------------------------------------------------------------------------------
   Free Vision TUI (graph mode)
  ------------------------------------------------------------------------------}
@@ -313,6 +557,7 @@ type
   PBGGraphView = ^TBGGraphView;
   TBGGraphView = object(TView)
     procedure Draw; virtual;
+    procedure DrawAgp;
   end;
 
   PBGWindow = ^TBGWindow;
@@ -345,6 +590,195 @@ begin
   end;
 end;
 
+// The AGP view: every fetched day folded onto one 24-hour axis. Per
+// time-of-day column the median is drawn solid, the 25-75% band in medium
+// shade and the 5-95% band in light shade — the forecast's "shade means
+// derived, not measured" convention. Cells are colored by the glucose level
+// at their own height, so the thresholds appear as horizontal color
+// boundaries: the top of a wide band goes red exactly where it crosses the
+// high limit, which is the pattern worth spotting.
+procedure TBGGraphView.DrawAgp;
+var
+  B: TDrawBuffer;
+  y, x, bk, gh, plotW, h: integer;
+  minV, maxV, pad, v, step, band, rowTop, rowBot, tick, midMgdl: double;
+  isTick, any: boolean;
+  lbl: string;
+  attr: byte;
+
+  // Percentiles are stored in mg/dL; the scale runs in display units.
+  function Disp(mgdlVal: double): double;
+  begin
+    if gUnit = mmol then
+      Result := mgdlVal * TrndiAPI.toMMOL
+    else
+      Result := mgdlVal;
+  end;
+
+begin
+  gh := Size.Y - 2; // row 0 is the header, the last row the time legend
+  plotW := Size.X - MARGIN;
+
+  // Header: the highlighted bucket while the arrow keys browse, otherwise a
+  // summary with the glyph legend; fetch feedback and the "not enough
+  // history" verdict take precedence over both.
+  MoveChar(B, ' ', attrText, Size.X);
+  if gAgpErr <> '' then
+    lbl := ' AGP: ' + gAgpErr + '  -  F7 returns to the graph'
+  else if not gAgpValid then
+    lbl := Format(' AGP: fetching %d days of history...', [gAgpDaysReq])
+  else if gAgpSel >= 0 then
+  begin
+    lbl := ' ' + Format('%.2d:%.2d-%.2d:%.2d',
+      [gAgpSel * AGP_BUCKET_MINS div 60, gAgpSel * AGP_BUCKET_MINS mod 60,
+      ((gAgpSel + 1) * AGP_BUCKET_MINS div 60) mod 24,
+      (gAgpSel + 1) * AGP_BUCKET_MINS mod 60]);
+    if gAgp[gAgpSel].n = 0 then
+      lbl := lbl + '  no readings'
+    else
+      lbl := lbl + Format('  median %s  25-75%%: %s-%s  5-95%%: %s-%s' +
+        '  (%d readings)',
+        [FmtBG(gAgp[gAgpSel].p50), FmtBG(gAgp[gAgpSel].p25),
+        FmtBG(gAgp[gAgpSel].p75), FmtBG(gAgp[gAgpSel].p5),
+        FmtBG(gAgp[gAgpSel].p95), gAgp[gAgpSel].n]);
+    lbl := lbl + '  -  Esc returns';
+  end
+  else
+  begin
+    lbl := Format(' AGP %d days (%d with data), %d readings  -  ' +
+      chFull + ' median  ' + chPredFull + ' 25-75%%  ' + chPredHalf +
+      ' 5-95%%', [gAgpDaysReq, gAgpDaysGot, gAgpCount]);
+    if gStatus <> '' then
+      lbl := lbl + '  -  ' + gStatus;
+  end;
+  MoveStr(B, Copy(lbl, 1, Size.X), attrText);
+  WriteLine(0, 0, Size.X, 1, B);
+
+  if (not gAgpValid) or (gh < 2) or (plotW < 2) then
+  begin
+    for y := 1 to Size.Y - 1 do
+    begin
+      MoveChar(B, ' ', attrText, Size.X);
+      WriteLine(0, y, Size.X, 1, B);
+    end;
+    exit;
+  end;
+
+  // Scale over the widest band drawn, padded so it never touches the edges.
+  any := false;
+  minV := 0;
+  maxV := 0;
+  for bk := 0 to AGP_BUCKETS - 1 do
+    if gAgp[bk].n > 0 then
+    begin
+      if not any then
+      begin
+        minV := Disp(gAgp[bk].p5);
+        maxV := Disp(gAgp[bk].p95);
+        any := true;
+      end;
+      if Disp(gAgp[bk].p5) < minV then
+        minV := Disp(gAgp[bk].p5);
+      if Disp(gAgp[bk].p95) > maxV then
+        maxV := Disp(gAgp[bk].p95);
+    end;
+  if gUnit = mmol then
+  begin
+    pad := 0.3;
+    step := 5;   // legend tick every 5 mmol/L
+  end
+  else
+  begin
+    pad := 6;
+    step := 50;  // ... and every 50 mg/dL
+  end;
+  minV := minV - pad;
+  maxV := maxV + pad;
+  band := (maxV - minV) / gh;
+
+  for y := 1 to Size.Y - 2 do
+  begin
+    MoveChar(B, ' ', attrText, Size.X);
+
+    // Does a multiple of the legend step fall inside this row's value band?
+    rowTop := maxV - (y - 1) * band;
+    rowBot := rowTop - band;
+    tick := Trunc(rowTop / step) * step;
+    isTick := (y > 1) and (y < Size.Y - 2) and (tick > rowBot);
+
+    // Scale labels: exact bounds on the edge rows, legend steps between
+    if (y = 1) or (y = Size.Y - 2) then
+    begin
+      if y = 1 then
+        v := maxV
+      else
+        v := minV;
+      if gUnit = mmol then
+        lbl := Format('%6.1f', [v])
+      else
+        lbl := Format('%6.0f', [v]);
+      MoveStr(B, lbl, attrLabel);
+    end
+    else if isTick then
+    begin
+      lbl := Format('%6.0f', [tick]);
+      MoveStr(B, lbl, attrLabel);
+    end;
+    MoveChar(B[MARGIN - 1], '|', attrLabel, 1);
+
+    // Dotted gridline under the bands on legend rows
+    if isTick then
+    begin
+      MoveChar(B[MARGIN - 1], '+', attrLabel, 1);
+      for x := 0 to plotW - 1 do
+        MoveChar(B[MARGIN + x], #250, attrLabel, 1);
+    end;
+
+    // Bands: whole-cell resolution — these are vertical ranges, not bar
+    // tops, so the half-block trick does not apply. The cursor's bucket
+    // trades level color for white, as the bar cursor does.
+    midMgdl := rowTop - band / 2;
+    if gUnit = mmol then
+      midMgdl := midMgdl / TrndiAPI.toMMOL;
+    for x := 0 to plotW - 1 do
+    begin
+      bk := x * AGP_BUCKETS div plotW;
+      if gAgp[bk].n = 0 then
+        continue;
+      if bk = gAgpSel then
+        attr := attrText
+      else
+        attr := LevelAttr(gApi.getLevel(midMgdl));
+      if (Disp(gAgp[bk].p50) <= rowTop) and (Disp(gAgp[bk].p50) > rowBot) then
+        MoveChar(B[MARGIN + x], chFull, attr, 1)
+      else if (Disp(gAgp[bk].p25) < rowTop) and (Disp(gAgp[bk].p75) > rowBot) then
+        MoveChar(B[MARGIN + x], chPredFull, attr, 1)
+      else if (Disp(gAgp[bk].p5) < rowTop) and (Disp(gAgp[bk].p95) > rowBot) then
+        MoveChar(B[MARGIN + x], chPredHalf, attr, 1);
+    end;
+    WriteLine(0, y, Size.X, 1, B);
+  end;
+
+  // Time legend: fixed clock hours — this axis is time of day, not a
+  // scrolling window.
+  MoveChar(B, ' ', attrLabel, Size.X);
+  for h := 0 to 3 do
+  begin
+    x := h * 6 * 60 div AGP_BUCKET_MINS * plotW div AGP_BUCKETS;
+    if x + 5 <= plotW then
+      MoveStr(B[MARGIN + x], Format('%.2d:00', [h * 6]), attrLabel);
+  end;
+  // Cursor marker under the first column of its bucket.
+  if gAgpSel >= 0 then
+    for x := 0 to plotW - 1 do
+      if x * AGP_BUCKETS div plotW = gAgpSel then
+      begin
+        MoveChar(B[MARGIN + x], '^', attrText, 1);
+        break;
+      end;
+  WriteLine(0, Size.Y - 1, Size.X, 1, B);
+end;
+
 // How many forecast columns to draw: none when the user turned it off, when
 // the backend could not produce one, when the trend is flat (a straight line
 // ahead says nothing) or when the fit was too noisy to be worth showing.
@@ -357,18 +791,6 @@ begin
 end;
 
 procedure TBGGraphView.Draw;
-const
-  attrText = $0F;   // white on black
-  attrLabel = $07;  // gray on black
-  chFull = #219;    // CP437 full block (video unit maps to Unicode)
-  chHalf = #220;    // CP437 lower half block
-  // The forecast reuses the bar geometry but a lighter texture, so it reads as
-  // the same measurement drawn weaker rather than as a different thing. Color
-  // stays free to mean level, as it does for the history.
-  chPredFull = #177;  // CP437 medium shade
-  chPredHalf = #176;  // CP437 light shade, as the half step
-  chDivider = #179;   // CP437 vertical line: the "now" boundary
-  MARGIN = 8;       // room for scale labels: "  12.3 |"
 var
   B: TDrawBuffer;
   y, x, i, gh, gw, first, pn, histW, horizon: integer;
@@ -393,6 +815,12 @@ var
   end;
 
 begin
+  if gAgpMode then
+  begin
+    DrawAgp;
+    exit;
+  end;
+
   gh := Size.Y - 2; // row 0 is the header, the last row the time legend
   gw := Size.X - MARGIN;
 
@@ -619,9 +1047,10 @@ begin
       NewStatusKey('~Alt-X~ Exit', kbAltX, cmQuit,
       NewStatusKey('~F5~ Refresh', kbF5, cmRefresh,
       NewStatusKey('~F6~ Forecast', kbF6, cmPredict,
+      NewStatusKey('~F7~ AGP', kbF7, cmAGP,
       NewStatusKey('~F9~ Settings', kbF9, cmSetup,
       NewStatusKey('~'#27#26'~ Inspect', kbNoKey, 0,
-      nil))))),
+      nil)))))),
     nil)));
 end;
 
@@ -650,23 +1079,63 @@ begin
   FetchAll;
 end;
 
+// Repaint and flush before a blocking fetch: Redraw only fills the video
+// buffer, and the driver's own flush waits for the event loop this handler
+// is still holding up. Without the explicit flush the "fetching..." header
+// would appear only after the wait it announces.
+procedure ShowFetching;
+begin
+  if GraphWin <> nil then
+    GraphWin^.Redraw;
+  UpdateScreen(false);
+end;
+
 procedure TTrndiTui.HandleEvent(var Event: TEvent);
 begin
   inherited HandleEvent(Event);
   if (Event.What = evCommand) and (Event.Command = cmRefresh) then
   begin
-    FetchAll;
+    // F5 refreshes what is on screen: the AGP where that is the view — its
+    // cache never rides the 5-minute poll — and the live data elsewhere.
+    if gAgpMode then
+    begin
+      gAgpValid := false;
+      gAgpErr := '';
+      ShowFetching;
+      FetchAgp(gAgpDaysReq);
+    end
+    else
+      FetchAll;
     if GraphWin <> nil then
       GraphWin^.Redraw;
     ClearEvent(Event);
   end
   else if (Event.What = evCommand) and (Event.Command = cmPredict) then
   begin
-    gPredictEnabled := not gPredictEnabled;
-    // Turning it back on mid-session has nothing to draw yet, so pay for the
-    // fetch here rather than leaving the key press look like it did nothing.
-    if gPredictEnabled and (not gPredictOK) then
-      FetchPredictions;
+    // Inert in the AGP view: a percentile-of-days chart has no "next 30 min".
+    if not gAgpMode then
+    begin
+      gPredictEnabled := not gPredictEnabled;
+      // Turning it back on mid-session has nothing to draw yet, so pay for the
+      // fetch here rather than leaving the key press look like it did nothing.
+      if gPredictEnabled and (not gPredictOK) then
+        FetchPredictions;
+      if GraphWin <> nil then
+        GraphWin^.Redraw;
+    end;
+    ClearEvent(Event);
+  end
+  else if (Event.What = evCommand) and (Event.Command = cmAGP) then
+  begin
+    gAgpMode := not gAgpMode;
+    gAgpSel := -1;
+    // The first toggle pays for the history fetch; after that the cache
+    // holds until F5, new settings or exit.
+    if gAgpMode and (not gAgpValid) and (gAgpErr = '') then
+    begin
+      ShowFetching;
+      FetchAgp(gAgpDaysReq);
+    end;
     if GraphWin <> nil then
       GraphWin^.Redraw;
     ClearEvent(Event);
@@ -674,7 +1143,18 @@ begin
   else if (Event.What = evCommand) and (Event.Command = cmSetup) then
   begin
     if ExecSetupDialog then
+    begin
       ReloadBackend;
+      // New backend, new thresholds and history: the cached profile is
+      // another backend's data, so it must not survive the switch.
+      gAgpValid := false;
+      gAgpErr := '';
+      if gAgpMode then
+      begin
+        ShowFetching;
+        FetchAgp(gAgpDaysReq);
+      end;
+    end;
     // Redraw either way: the dialog covered the graph while it was open.
     if GraphWin <> nil then
       GraphWin^.Redraw;
@@ -682,38 +1162,77 @@ begin
   end
   else if Event.What = evKeyDown then
   begin
-    // The reading cursor. One column per reading, so Left/Right step one
-    // reading at a time; the left stop is the oldest column on screen —
-    // older readings exist but have no column to put the cursor on.
-    if Length(gReadings) = 0 then
-      exit;
-    case Event.KeyCode of
-    kbLeft:
-      if gSel < 0 then
-        gSel := High(gReadings)
-      else if gSel > gFirstVis then
-        Dec(gSel);
-    kbRight:
-      if gSel < 0 then
-        exit
+    if gAgpMode then
+    begin
+      // The bucket cursor: same moves as the reading cursor below, over the
+      // 48 time-of-day slots. Empty buckets stay selectable — the header
+      // saying "no readings" is how a nightly sensor gap shows itself.
+      if not gAgpValid then
+        exit;
+      case Event.KeyCode of
+      kbLeft:
+        if gAgpSel < 0 then
+          gAgpSel := AGP_BUCKETS - 1
+        else if gAgpSel > 0 then
+          Dec(gAgpSel);
+      kbRight:
+        if gAgpSel < 0 then
+          exit
+        else
+        begin
+          // Stepping past the last bucket lands back on the summary header.
+          Inc(gAgpSel);
+          if gAgpSel > AGP_BUCKETS - 1 then
+            gAgpSel := -1;
+        end;
+      kbHome:
+        gAgpSel := 0;
+      kbEnd:
+        gAgpSel := AGP_BUCKETS - 1;
+      kbEsc:
+        if gAgpSel < 0 then
+          exit
+        else
+          gAgpSel := -1;
       else
-      begin
-        // Stepping past the newest reading lands back on the live header.
-        Inc(gSel);
-        if gSel > High(gReadings) then
-          gSel := -1;
+        exit;
       end;
-    kbHome:
-      gSel := gFirstVis;
-    kbEnd:
-      gSel := High(gReadings);
-    kbEsc:
-      if gSel < 0 then
-        exit
-      else
-        gSel := -1;
+    end
     else
-      exit;
+    begin
+      // The reading cursor. One column per reading, so Left/Right step one
+      // reading at a time; the left stop is the oldest column on screen —
+      // older readings exist but have no column to put the cursor on.
+      if Length(gReadings) = 0 then
+        exit;
+      case Event.KeyCode of
+      kbLeft:
+        if gSel < 0 then
+          gSel := High(gReadings)
+        else if gSel > gFirstVis then
+          Dec(gSel);
+      kbRight:
+        if gSel < 0 then
+          exit
+        else
+        begin
+          // Stepping past the newest reading lands back on the live header.
+          Inc(gSel);
+          if gSel > High(gReadings) then
+            gSel := -1;
+        end;
+      kbHome:
+        gSel := gFirstVis;
+      kbEnd:
+        gSel := High(gReadings);
+      kbEsc:
+        if gSel < 0 then
+          exit
+        else
+          gSel := -1;
+      else
+        exit;
+      end;
     end;
     if GraphWin <> nil then
       GraphWin^.Redraw;
@@ -752,27 +1271,6 @@ const
   BAR_WIDTH = 20;
   BAR_FULL = '█';
   BAR_EMPTY = '░';
-
-// Thresholds and computed figures are plain mg/dL numbers rather than
-// BGReadings, so BGReading.format is out of reach — format them here instead.
-// Valid for differences (SD) as well: the conversion has no offset.
-function FmtBG(mgdlVal: double): string;
-begin
-  if gUnit = mmol then
-    Result := Format('%.1f', [mgdlVal * TrndiAPI.toMMOL])
-  else
-    Result := Format('%.0f', [mgdlVal]);
-end;
-
-function FmtDuration(mins: integer): string;
-begin
-  if mins < 60 then
-    Result := Format('%d min', [mins])
-  else if mins mod 60 = 0 then
-    Result := Format('%d h', [mins div 60])
-  else
-    Result := Format('%d h %d min', [mins div 60, mins mod 60]);
-end;
 
 function Bar(pct: double): string;
 var
@@ -823,7 +1321,7 @@ begin
     interval := 5;
   // Ask for a full window even from a one-minute uploader, plus slack for
   // backends that count from their own idea of "now".
-  readings := gApi.getReadings(span, span div interval + 16);
+  readings := FetchReadingsSafe(span, span div interval + 16);
 
   cutoff := IncMinute(Now, -span);
   n := 0;
@@ -1037,7 +1535,7 @@ begin
     bucketMins := interval;
   cols := (span + bucketMins - 1) div bucketMins;
 
-  readings := gApi.getReadings(span, span div interval + 16);
+  readings := FetchReadingsSafe(span, span div interval + 16);
   cutoff := IncMinute(Now, -span);
 
   SetLength(sums, cols);
@@ -1122,6 +1620,159 @@ begin
 end;
 
 {------------------------------------------------------------------------------
+  --agp: the AGP as a one-shot chart
+ ------------------------------------------------------------------------------}
+
+const
+  AGP_ONESHOT_ROWS = 16;
+  AGP_ONESHOT_COLS = 72;   // 1.5 columns per half-hour bucket
+
+// The F7 view printed once: same buckets, same three-way cell test, UTF-8
+// shade glyphs instead of CP437 and SGR colors instead of FV attributes.
+procedure RunAGP(days: integer);
+var
+  y, x, b, h: integer;
+  minV, maxV, pad, step, band, rowTop, rowBot, tick, midMgdl: double;
+  isTick, any, color: boolean;
+  line, sgr, want, gutter: string;
+  axis: string;
+
+  function Disp(mgdlVal: double): double;
+  begin
+    if gUnit = mmol then
+      Result := mgdlVal * TrndiAPI.toMMOL
+    else
+      Result := mgdlVal;
+  end;
+
+begin
+  if not FetchAgp(days) then
+  begin
+    writeln(stderr, 'No AGP: ', gAgpErr, '.');
+    halt(4);
+  end;
+
+  writeln(Format('AGP — last %d days — %s', [days, gApi.systemName]));
+  // Days with data against days asked for: a backend that could not fill the
+  // window — capped history, a fresh site — shows up here, not as a silently
+  // thinner profile.
+  writeln(Format('%d readings across %d of %d days since %s, %d min buckets',
+    [gAgpCount, gAgpDaysGot, days,
+    FormatDateTime('yyyy-mm-dd', gAgpOldest), AGP_BUCKET_MINS]));
+  writeln;
+
+  // Scale over the widest band, padded — the F7 view's arithmetic.
+  any := false;
+  minV := 0;
+  maxV := 0;
+  for b := 0 to AGP_BUCKETS - 1 do
+    if gAgp[b].n > 0 then
+    begin
+      if not any then
+      begin
+        minV := Disp(gAgp[b].p5);
+        maxV := Disp(gAgp[b].p95);
+        any := true;
+      end;
+      if Disp(gAgp[b].p5) < minV then
+        minV := Disp(gAgp[b].p5);
+      if Disp(gAgp[b].p95) > maxV then
+        maxV := Disp(gAgp[b].p95);
+    end;
+  if gUnit = mmol then
+  begin
+    pad := 0.3;
+    step := 5;
+  end
+  else
+  begin
+    pad := 6;
+    step := 50;
+  end;
+  minV := minV - pad;
+  maxV := maxV + pad;
+  band := (maxV - minV) / AGP_ONESHOT_ROWS;
+
+  color := StdoutSupportsColor;
+  for y := 1 to AGP_ONESHOT_ROWS do
+  begin
+    rowTop := maxV - (y - 1) * band;
+    rowBot := rowTop - band;
+    tick := Trunc(rowTop / step) * step;
+    isTick := (y > 1) and (y < AGP_ONESHOT_ROWS) and (tick > rowBot);
+
+    if (y = 1) or (y = AGP_ONESHOT_ROWS) then
+    begin
+      if gUnit = mmol then
+        gutter := Format('%6.1f |', [maxV])
+      else
+        gutter := Format('%6.0f |', [maxV]);
+      if y = AGP_ONESHOT_ROWS then
+        if gUnit = mmol then
+          gutter := Format('%6.1f |', [minV])
+        else
+          gutter := Format('%6.0f |', [minV]);
+    end
+    else if isTick then
+      gutter := Format('%6.0f +', [tick])
+    else
+      gutter := '       |';
+
+    line := gutter;
+    sgr := '';
+    midMgdl := rowTop - band / 2;
+    if gUnit = mmol then
+      midMgdl := midMgdl / TrndiAPI.toMMOL;
+    for x := 0 to AGP_ONESHOT_COLS - 1 do
+    begin
+      b := x * AGP_BUCKETS div AGP_ONESHOT_COLS;
+      want := '';
+      if gAgp[b].n = 0 then
+        want := ' '
+      else if (Disp(gAgp[b].p50) <= rowTop) and (Disp(gAgp[b].p50) > rowBot) then
+        want := '█'
+      else if (Disp(gAgp[b].p25) < rowTop) and (Disp(gAgp[b].p75) > rowBot) then
+        want := '▒'
+      else if (Disp(gAgp[b].p5) < rowTop) and (Disp(gAgp[b].p95) > rowBot) then
+        want := '░'
+      else if isTick then
+        want := '·'
+      else
+        want := ' ';
+      if color and (want <> ' ') and (want <> '·') then
+      begin
+        if LevelSGR(gApi.getLevel(midMgdl)) <> sgr then
+        begin
+          sgr := LevelSGR(gApi.getLevel(midMgdl));
+          line := line + sgr;
+        end;
+      end
+      else if (sgr <> '') and ((want = ' ') or (want = '·')) then
+      begin
+        line := line + #27'[0m';
+        sgr := '';
+      end;
+      line := line + want;
+    end;
+    if sgr <> '' then
+      line := line + #27'[0m';
+    writeln(line);
+  end;
+
+  // Clock-hour axis, labels at the same columns the buckets map onto.
+  axis := StringOfChar(' ', 8 + AGP_ONESHOT_COLS);
+  for h := 0 to 3 do
+  begin
+    x := h * 6 * 60 div AGP_BUCKET_MINS * AGP_ONESHOT_COLS div AGP_BUCKETS;
+    if x + 5 <= AGP_ONESHOT_COLS then
+      move(Format('%.2d:00', [h * 6])[1], axis[9 + x], 5);
+  end;
+  writeln(TrimRight(axis));
+  writeln;
+  writeln('  █ median   ▒ 25-75%   ░ 5-95%');
+end;
+
+{------------------------------------------------------------------------------
   Entry point
  ------------------------------------------------------------------------------}
 
@@ -1193,6 +1844,9 @@ begin
     [STATS_DEFAULT_HOURS, STATS_MAX_HOURS]));
   writeln(Format('      --spark [H]  the last H hours as a sparkline (default %d, max %d)',
     [SPARK_DEFAULT_HOURS, SPARK_MAX_HOURS]));
+  writeln('      --agp [D]    time-of-day profile of the last D days: median and');
+  writeln(Format('                   percentile bands (default %d, max %d; F7 in graph mode)',
+    [AGP_DEFAULT_DAYS, AGP_MAX_DAYS]));
   writeln('      --predict    graph mode: start with the forecast drawn (F6 toggles)');
   writeln('      --setup      settings window: backend, address, secret, unit, limits');
   writeln('  -h, --help       show this help');
@@ -1224,8 +1878,10 @@ var
   sparkMode: boolean = false;
   setupMode: boolean = false;
   checkMode: boolean = false;
+  agpMode: boolean = false;
   statsHours: integer = STATS_DEFAULT_HOURS;
   sparkHours: integer = SPARK_DEFAULT_HOURS;
+  agpDays: integer = AGP_DEFAULT_DAYS;
 begin
   OnGetApplicationName := @TrndiAppName;
 
@@ -1276,6 +1932,21 @@ begin
           BadUsage(Format('--spark takes a number of hours between 1 and %d, got "%s".',
             [SPARK_MAX_HOURS, val]));
     end;
+    '--agp':
+    begin
+      agpMode := true;
+      // The same shapes again, but the window is counted in days.
+      if (val = '') and (i < ParamCount) and IsNumeric(ParamStr(i + 1)) then
+      begin
+        val := ParamStr(i + 1);
+        Inc(i);
+      end;
+      if val <> '' then
+        if (not IsNumeric(val)) or (not TryStrToInt(val, agpDays)) or
+          (agpDays < AGP_MIN_DAYS) or (agpDays > AGP_MAX_DAYS) then
+          BadUsage(Format('--agp takes a number of days between %d and %d, got "%s".',
+            [AGP_MIN_DAYS, AGP_MAX_DAYS, val]));
+    end;
     '-c', '--check':
       checkMode := true;
     '--predict':
@@ -1297,12 +1968,12 @@ begin
     Inc(i);
   end;
 
-  if ord(graphMode) + ord(statsMode) + ord(sparkMode) > 1 then
-    BadUsage('--graph, --stats and --spark cannot be combined.');
-  if setupMode and (graphMode or statsMode or sparkMode) then
-    BadUsage('--setup cannot be combined with --graph, --stats or --spark.');
-  if checkMode and (graphMode or statsMode or sparkMode or setupMode) then
-    BadUsage('--check cannot be combined with --graph, --stats, --spark or --setup.');
+  if ord(graphMode) + ord(statsMode) + ord(sparkMode) + ord(agpMode) > 1 then
+    BadUsage('--graph, --stats, --spark and --agp cannot be combined.');
+  if setupMode and (graphMode or statsMode or sparkMode or agpMode) then
+    BadUsage('--setup cannot be combined with --graph, --stats, --spark or --agp.');
+  if checkMode and (graphMode or statsMode or sparkMode or agpMode or setupMode) then
+    BadUsage('--check cannot be combined with --graph, --stats, --spark, --agp or --setup.');
 
 {$IFDEF WINDOWS}
   // The reading line and the stats bars are UTF-8; the console needs telling.
@@ -1327,6 +1998,8 @@ begin
       RunStats(statsHours)
     else if sparkMode then
       RunSpark(sparkHours)
+    else if agpMode then
+      RunAGP(agpDays)
     else
       RunOnce(checkMode);
   finally

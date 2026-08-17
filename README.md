@@ -37,18 +37,24 @@ $ trndi-cli --spark
 
 On a terminal the glyphs are colored by the same thresholds as the graph; piped — into a status bar module, say — they come out plain, as does setting `NO_COLOR`.
 
+With `--agp` (or `F7` in graph mode) the last two weeks fold onto a single 24-hour axis as an [Ambulatory Glucose Profile](https://en.wikipedia.org/wiki/Ambulatory_glucose_profile) — the view diabetes clinics work from. Per half hour of the day, the median glucose across all days is drawn solid, the 25–75% band in medium shade and the 5–95% band in light shade, colored by the same thresholds as everything else: a band widening at 07:00 says breakfast is inconsistent, a median dipping at 03:00 says the nights run low. In graph mode the arrow keys walk the half-hour slots with the exact percentiles in the header, and `F5` refetches the profile.
+
+The profile needs several days of history in one request, which the backend decides: Nightscout, xDrip and Tandem serve the full two weeks, while Dexcom Share, FreeStyle Libre and CareLink only hand out the last day or so — there the chart is honestly declined with a message, since percentiles over one day would just be that day.
+
 ## Usage
 
 ```
 trndi-cli               print the current reading and exit
 trndi-cli --check       ... with the range in the exit code, for scripts
 trndi-cli --graph       interactive TUI graph (arrows inspect readings, F5 refresh,
-                        F6 forecast, F9 settings, Alt-X exit)
+                        F6 forecast, F7 AGP, F9 settings, Alt-X exit)
 trndi-cli --predict     ... with the forecast drawn from the start
 trndi-cli --stats       summarise the last 24 h
 trndi-cli --stats 6     ... or any window from 1 to 168 hours
 trndi-cli --spark       the last 3 h as a one-line sparkline
 trndi-cli --spark 8     ... or any window from 1 to 24 hours
+trndi-cli --agp         time-of-day percentile profile of the last 14 days
+trndi-cli --agp 7       ... or any window from 3 to 28 days
 trndi-cli --setup       settings window: backend, address, secret, unit, limits
 trndi-cli --help        options
 ```

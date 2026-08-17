@@ -114,6 +114,13 @@ trndi-cli's HTTP transport on Windows is libcurl, so `libcurl.dll` must be in `P
 
 The GUI's display names (e.g. `NightScout`) are also accepted, but the codes above are the stable form.
 
+How much history a backend serves in one request also decides what `--agp`
+(and `F7` in graph mode) can show: Nightscout and xDrip serve the full window,
+Tandem up to about four weeks, while Dexcom Share hands out at most the last
+24 hours (trndi-cli clamps the request automatically), LibreLinkUp about 12
+hours and CareLink about a day. Below three distinct days of data the AGP is
+declined with a message naming how much history came back.
+
 ## Stats thresholds
 
 `--stats` splits the period into bands using the thresholds the backend itself
@@ -145,10 +152,10 @@ trndi-cli exits with a distinct code and a message on stderr:
 | `1` | No backend configured | Run `trndi-cli --setup`, or set `remote.type` as described above |
 | `2` | Unknown backend | Check `remote.type` against the table |
 | `3` | Connection failed | Message includes the backend's error — check address/credentials |
-| `4` | No recent reading | Backend reachable but silent > 24 h (with `--stats`: nothing in the requested window; with `--check`: also a stale fallback, so scripts never alarm on old data) — check the uploader |
+| `4` | No recent reading | Backend reachable but silent > 24 h (with `--stats`: nothing in the requested window; with `--agp`: fewer than 3 days of history came back; with `--check`: also a stale fallback, so scripts never alarm on old data) — check the uploader |
 | `5` | Above the high threshold | Only from `--check` — an answer, not an error |
 | `6` | Below the low threshold | Only from `--check` — an answer, not an error |
-| `64` | Bad command line | Unknown option, a `--stats` or `--spark` window outside its range, or `--setup` without a terminal |
+| `64` | Bad command line | Unknown option, a `--stats`, `--spark` or `--agp` window outside its range, or `--setup` without a terminal |
 
 `--check` prints the same line as a plain run; the exit code uses the same
 thresholds the graph colors and `--stats` bands come from — the backend's own,

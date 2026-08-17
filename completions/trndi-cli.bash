@@ -9,14 +9,14 @@ _trndi_cli()
     local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
     COMPREPLY=()
 
-    # --stats and --spark take a number of hours; suggest nothing rather
-    # than flags.
+    # --stats and --spark take a number of hours, --agp a number of days;
+    # suggest nothing rather than flags.
     case $prev in
-    -s|--stats|--spark)
+    -s|--stats|--spark|--agp)
         return
         ;;
     esac
 
-    COMPREPLY=($(compgen -W '--check --graph --stats --spark --predict --setup --help' -- "$cur"))
+    COMPREPLY=($(compgen -W '--check --graph --stats --spark --agp --predict --setup --help' -- "$cur"))
 }
 complete -F _trndi_cli trndi-cli

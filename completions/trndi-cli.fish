@@ -9,6 +9,7 @@ complete -c trndi-cli -s c -l check -d 'Print the reading, with the range in the
 complete -c trndi-cli -s g -l graph -d 'Interactive TUI with a reading graph (F5 refreshes)'
 complete -c trndi-cli -s s -l stats -d 'Summarise the last H hours (default 24, max 168)' -x
 complete -c trndi-cli -l spark -d 'The last H hours as a sparkline (default 3, max 24)' -x
+complete -c trndi-cli -l agp -d 'Time-of-day glucose profile of the last D days (default 14, max 28)' -x
 complete -c trndi-cli -l predict -d 'Graph mode: start with the forecast drawn (F6 toggles)'
 complete -c trndi-cli -l setup -d 'Settings window: backend, address, secret, unit, limits'
 complete -c trndi-cli -s h -l help -d 'Show help'
