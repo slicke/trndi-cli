@@ -41,8 +41,10 @@
   trend arrow and delta, then exits. With --graph it opens a Free Vision TUI
   showing the reading and a block-character graph, refreshing every 5 minutes
   (F5 forces a refresh). With --stats it summarises a period of history:
-  average, variability, GMI and the time-in-range distribution. With --check
-  the exit code carries where the reading sits: 0 in range, 5 high, 6 low.
+  average, variability, GMI and the time-in-range distribution. With --spark
+  the recent history becomes a one-line sparkline, colored by the same
+  thresholds as the graph. With --check the exit code carries where the
+  reading sits: 0 in range, 5 high, 6 low.
 
   Settings are read from the GUI's config (~/.config/Trndi.cfg on Linux), so
   a machine with a configured Trndi needs no setup.
@@ -61,6 +63,8 @@ cthreads, // MUST be first: trndi.native.async starts a worker thread; without
 SysUtils, DateUtils,
 {$IFDEF WINDOWS}
 Windows,
+{$ELSE}
+termio, // IsATTY, for deciding whether the sparkline gets colors
 {$ENDIF}
 App, Objects, Drivers, Views, Menus, FVConsts, Video,
 trndi.native, trndi.native.console,
@@ -125,6 +129,26 @@ begin
     FreeAndNil(api);
     exit;
   end;
+  // User thresholds on top of what the backend reported, exactly as the GUI
+  // lays them on (umain_init.inc): the wizard pair only where the backend
+  // supplied no high limit of its own (401 is initCGMCore's untouched
+  // default), the override pair always. Same keys, same order, so the graph,
+  // spark, stats bands and --check agree with the desktop app.
+  if api.cgmHi = 401 then
+  begin
+    if s.wizHi > 0 then
+      api.cgmHi := s.wizHi;
+    if s.wizLo > 0 then
+      api.cgmLo := s.wizLo;
+  end;
+  if s.ovrLo > 0 then
+    api.cgmLo := s.ovrLo;
+  if s.ovrHi > 0 then
+    api.cgmHi := s.ovrHi;
+  if s.ovrRangeLo > 0 then
+    api.cgmRangeLo := s.ovrRangeLo;
+  if s.ovrRangeHi > 0 then
+    api.cgmRangeHi := s.ovrRangeHi;
   Result := true;
 end;
 
@@ -771,8 +795,13 @@ begin
     coverage := 100;
 
   core := gApi.cgm;
-  hasTop := core.top <> TrndiAPI.CGM_RANGE_HI_DISABLED;
-  hasBottom := core.bottom <> TrndiAPI.CGM_RANGE_LO_DISABLED;
+  // A personal bound that meets or passes the hard limit leaves its band
+  // empty — an override.hi at the backend's own target top does that — so
+  // fold it away rather than print a "10.0-10.0" row.
+  hasTop := (core.top <> TrndiAPI.CGM_RANGE_HI_DISABLED) and
+    (core.top < core.hi);
+  hasBottom := (core.bottom <> TrndiAPI.CGM_RANGE_LO_DISABLED) and
+    (core.bottom > core.lo);
   if hasTop then
     inHi := core.top
   else
@@ -834,6 +863,169 @@ begin
   end
   else
     StatRow('Low', '<' + FmtBG(core.lo), counts[BGLOW], n, interval);
+end;
+
+{------------------------------------------------------------------------------
+  Sparkline (--spark)
+ ------------------------------------------------------------------------------}
+
+const
+  SPARK_DEFAULT_HOURS = 3;
+  SPARK_MAX_HOURS = 24;
+  // Longer than this and the line outgrows a status bar; the buckets widen
+  // instead, so a day still fits.
+  SPARK_MAX_COLS = 60;
+
+// Color only when stdout is a terminal that will interpret the escape codes:
+// a pipe — a status bar module, a MOTD script — gets the bare glyphs, and
+// NO_COLOR is honoured. On Windows the codes only work once virtual terminal
+// processing is switched on, so failing to enable it means no color.
+function StdoutSupportsColor: boolean;
+{$IFDEF WINDOWS}
+const
+  ENABLE_VT = $0004;  // ENABLE_VIRTUAL_TERMINAL_PROCESSING, absent from older headers
+var
+  h: HANDLE;
+  mode: DWORD;
+{$ENDIF}
+begin
+  if GetEnvironmentVariable('NO_COLOR') <> '' then
+    exit(false);
+{$IFDEF WINDOWS}
+  h := GetStdHandle(STD_OUTPUT_HANDLE);
+  Result := (GetFileType(h) = FILE_TYPE_CHAR) and GetConsoleMode(h, mode) and
+    SetConsoleMode(h, mode or ENABLE_VT);
+{$ELSE}
+  Result := IsATTY(output) = 1;
+{$ENDIF}
+end;
+
+// The graph's fixed scheme as SGR codes: red high, blue low, green in range
+// (the personal-limit sublevels included, as in LevelAttr).
+function LevelSGR(lvl: BGValLevel): string;
+begin
+  case lvl of
+  BGHigh:
+    Result := #27'[31m';
+  BGLOW:
+    Result := #27'[34m';
+  else
+    Result := #27'[32m';
+  end;
+end;
+
+// The last `hours` hours as one line of block glyphs, one per reporting
+// interval, followed by the current reading — graph mode's shape in a form a
+// status bar or MOTD can carry. Scaled to the window's own min/max, like any
+// sparkline; color carries the thresholds, so the scale needs no labels.
+procedure RunSpark(hours: integer);
+const
+  GLYPHS: array[0..7] of string =
+    ('▁', '▂', '▃', '▄', '▅', '▆', '▇', '█');
+var
+  readings: BGResults;
+  sums: array of double;
+  counts: array of integer;
+  span, interval, bucketMins, cols, firstCol, i, b, idx, n: integer;
+  cutoff: TDateTime;
+  mean, minV, maxV: double;
+  line, sgr, want: string;
+  color, seen: boolean;
+begin
+  span := hours * 60;
+  interval := gApi.getReportingInterval;
+  if interval < 1 then
+    interval := 5;
+
+  // One bucket per reporting interval until the line would overflow, then
+  // wider buckets; readings within a bucket are averaged.
+  bucketMins := (span + SPARK_MAX_COLS - 1) div SPARK_MAX_COLS;
+  if bucketMins < interval then
+    bucketMins := interval;
+  cols := (span + bucketMins - 1) div bucketMins;
+
+  readings := gApi.getReadings(span, span div interval + 16);
+  cutoff := IncMinute(Now, -span);
+
+  SetLength(sums, cols);
+  SetLength(counts, cols);
+  n := 0;
+  for i := 0 to High(readings) do
+  begin
+    if readings[i].date < cutoff then
+      continue;                       // backends may hand back a wider window
+    b := MinutesBetween(readings[i].date, cutoff) div bucketMins;
+    if b > cols - 1 then
+      b := cols - 1;                  // clock skew can date a reading past now
+    sums[b] := sums[b] + readings[i].convert(mgdl);
+    Inc(counts[b]);
+    Inc(n);
+  end;
+
+  if n = 0 then
+  begin
+    writeln(stderr, Format('No readings in the last %d h.', [hours]));
+    halt(4);
+  end;
+
+  // Scale over the bucket means. mg/dL throughout: the conversion is linear,
+  // so the glyph heights come out the same in either unit.
+  seen := false;
+  minV := 0;
+  maxV := 0;
+  for b := 0 to cols - 1 do
+  begin
+    if counts[b] = 0 then
+      continue;
+    mean := sums[b] / counts[b];
+    if (not seen) or (mean < minV) then
+      minV := mean;
+    if (not seen) or (mean > maxV) then
+      maxV := mean;
+    seen := true;
+  end;
+
+  // A window the backend could not fill starts at the data, not at a run of
+  // blanks; a gap in the middle stays a gap rather than borrowing a value.
+  firstCol := 0;
+  while counts[firstCol] = 0 do
+    Inc(firstCol);
+
+  color := StdoutSupportsColor;
+  line := '';
+  sgr := '';
+  for b := firstCol to cols - 1 do
+  begin
+    if counts[b] = 0 then
+    begin
+      line := line + ' ';
+      continue;
+    end;
+    mean := sums[b] / counts[b];
+    if maxV > minV then
+      idx := round((mean - minV) / (maxV - minV) * 7)
+    else
+      idx := 3;                       // a flat window sits mid-height
+    if color then
+    begin
+      want := LevelSGR(gApi.getLevel(mean));
+      if want <> sgr then
+      begin
+        line := line + want;
+        sgr := want;
+      end;
+    end;
+    line := line + GLYPHS[idx];
+  end;
+  if sgr <> '' then
+    line := line + #27'[0m';
+
+  // The line the bare invocation prints, after the history it summarises.
+  // A backend with history but no fresh reading still shows the sparkline.
+  FetchCurrent;
+  if gHaveCurrent then
+    line := line + '  ' + CurrentLine;
+  writeln(line);
 end;
 
 {------------------------------------------------------------------------------
@@ -905,8 +1097,10 @@ begin
   writeln('  -g, --graph      interactive TUI with a reading graph (F5 refreshes)');
   writeln(Format('  -s, --stats [H]  summarise the last H hours (default %d, max %d)',
     [STATS_DEFAULT_HOURS, STATS_MAX_HOURS]));
+  writeln(Format('      --spark [H]  the last H hours as a sparkline (default %d, max %d)',
+    [SPARK_DEFAULT_HOURS, SPARK_MAX_HOURS]));
   writeln('      --no-predict graph mode: start without the forecast (F6 toggles)');
-  writeln('      --setup      settings window: backend, address, secret, unit');
+  writeln('      --setup      settings window: backend, address, secret, unit, limits');
   writeln('  -h, --help       show this help');
 end;
 
@@ -933,9 +1127,11 @@ var
   eq: SizeInt;
   graphMode: boolean = false;
   statsMode: boolean = false;
+  sparkMode: boolean = false;
   setupMode: boolean = false;
   checkMode: boolean = false;
   statsHours: integer = STATS_DEFAULT_HOURS;
+  sparkHours: integer = SPARK_DEFAULT_HOURS;
 begin
   OnGetApplicationName := @TrndiAppName;
 
@@ -971,6 +1167,21 @@ begin
           BadUsage(Format('--stats takes a number of hours between 1 and %d, got "%s".',
             [STATS_MAX_HOURS, val]));
     end;
+    '--spark':
+    begin
+      sparkMode := true;
+      // The same shapes as --stats: "--spark 8", "--spark=8" or bare.
+      if (val = '') and (i < ParamCount) and IsNumeric(ParamStr(i + 1)) then
+      begin
+        val := ParamStr(i + 1);
+        Inc(i);
+      end;
+      if val <> '' then
+        if (not IsNumeric(val)) or (not TryStrToInt(val, sparkHours)) or
+          (sparkHours < 1) or (sparkHours > SPARK_MAX_HOURS) then
+          BadUsage(Format('--spark takes a number of hours between 1 and %d, got "%s".',
+            [SPARK_MAX_HOURS, val]));
+    end;
     '-c', '--check':
       checkMode := true;
     '--no-predict':
@@ -988,12 +1199,12 @@ begin
     Inc(i);
   end;
 
-  if graphMode and statsMode then
-    BadUsage('--graph and --stats cannot be combined.');
-  if setupMode and (graphMode or statsMode) then
-    BadUsage('--setup cannot be combined with --graph or --stats.');
-  if checkMode and (graphMode or statsMode or setupMode) then
-    BadUsage('--check cannot be combined with --graph, --stats or --setup.');
+  if ord(graphMode) + ord(statsMode) + ord(sparkMode) > 1 then
+    BadUsage('--graph, --stats and --spark cannot be combined.');
+  if setupMode and (graphMode or statsMode or sparkMode) then
+    BadUsage('--setup cannot be combined with --graph, --stats or --spark.');
+  if checkMode and (graphMode or statsMode or sparkMode or setupMode) then
+    BadUsage('--check cannot be combined with --graph, --stats, --spark or --setup.');
 
 {$IFDEF WINDOWS}
   // The reading line and the stats bars are UTF-8; the console needs telling.
@@ -1016,6 +1227,8 @@ begin
       RunGraph
     else if statsMode then
       RunStats(statsHours)
+    else if sparkMode then
+      RunSpark(sparkHours)
     else
       RunOnce(checkMode);
   finally

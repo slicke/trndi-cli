@@ -27,6 +27,15 @@ With `--stats` it summarises a period instead — average, spread, GMI and the t
 
 ![The --stats output: average, standard deviation, GMI, extremes and a five-band time-in-range breakdown with bars](doc/img/stat.png)
 
+With `--spark` the last hours become a single line — the graph's shape and colors as a sparkline, followed by the current reading — sized to fit a status bar, MOTD or prompt:
+
+```
+$ trndi-cli --spark
+▃▃▄▅▅▅▅▄▄▃▃▂▂▂▁▁▁▂▃▃▃▄▅▇██████▇▇▆▆▅  7.1 mmol/L ↘ (-0.4)  20:15
+```
+
+On a terminal the glyphs are colored by the same thresholds as the graph; piped — into a status bar module, say — they come out plain, as does setting `NO_COLOR`.
+
 ## Usage
 
 ```
@@ -36,7 +45,9 @@ trndi-cli --graph       interactive TUI graph (F5 refresh, F6 forecast, F9 setti
 trndi-cli --no-predict  ... with the forecast hidden from the start
 trndi-cli --stats       summarise the last 24 h
 trndi-cli --stats 6     ... or any window from 1 to 168 hours
-trndi-cli --setup       settings window: backend, address, secret, unit
+trndi-cli --spark       the last 3 h as a one-line sparkline
+trndi-cli --spark 8     ... or any window from 1 to 24 hours
+trndi-cli --setup       settings window: backend, address, secret, unit, limits
 trndi-cli --help        options
 ```
 

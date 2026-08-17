@@ -13,7 +13,7 @@ trndi-cli reads the settings the [Trndi](https://github.com/slicke/trndi) GUI sa
 
 ## What trndi-cli reads
 
-Only four settings are used:
+Four settings select and connect the backend:
 
 | Key             | Meaning                                             | Values                       |
 |-----------------|-----------------------------------------------------|------------------------------|
@@ -22,13 +22,24 @@ Only four settings are used:
 | `remote.creds`  | Credential (secret, token or password — see below)  |                              |
 | `unit`          | Display unit                                        | `mmol` (default) or `mgdl`   |
 
-The rest of this page describes those four values and where they live. Setting
+Six more are optional threshold overrides — mg/dL integers, applied on top of
+whatever the backend reports, in the same order the GUI applies them (see
+[Stats thresholds](#stats-thresholds)):
+
+| Key                                   | Meaning                                                     |
+|---------------------------------------|-------------------------------------------------------------|
+| `override.hi` / `override.lo`         | The hard high/low limits — graph red/blue, `--check` exit codes |
+| `override.rangehi` / `override.rangelo` | The personal in-range band                                |
+| `wizard.hi` / `wizard.lo`             | The GUI wizard's limits, used only when the backend reports none |
+
+The rest of this page describes those values and where they live. Setting
 them from trndi-cli itself is one command — see below.
 
 ## The settings window
 
-`trndi-cli --setup` opens a Free Vision window over the four values: a backend
-picker, the address and secret fields, and the unit. `F9` opens the same window
+`trndi-cli --setup` opens a Free Vision window over the settings: a backend
+picker, the address and secret fields, the unit and the two hard limits.
+`F9` opens the same window
 from graph mode, where saving reconnects and refetches; a backend that fails to
 connect is reported and the running one kept. On a machine with nothing
 configured, a plain `trndi-cli` offers the window rather than only naming the
@@ -46,8 +57,11 @@ up from either side. Three things worth knowing:
   applies are checked when you save.
 - **Test** connects with the values on screen without saving them. It costs one
   request, and the window sits still until the backend answers.
+- **The limit fields are typed in the display unit** but stored as the mg/dL
+  `override.hi`/`override.lo` keys the GUI applies too, so both apps color by
+  the same thresholds. Blank leaves the backend's own limits in charge.
 
-The window needs a terminal of at least 68x19, and a terminal at all: with
+The window needs a terminal of at least 68x22, and a terminal at all: with
 input or output redirected, `--setup` refuses (exit 64) and an unconfigured run
 falls back to the message and exit 1.
 
@@ -103,10 +117,18 @@ The GUI's display names (e.g. `NightScout`) are also accepted, but the codes abo
 ## Stats thresholds
 
 `--stats` splits the period into bands using the thresholds the backend itself
-reports — nothing about them is configured in trndi-cli. On Nightscout they are
-the site's own settings: `bgTargetBottom`/`bgTargetTop` bound the in-range band,
-`bgLow`/`bgHigh` the very low/very high ones. Backends that report only a hard
-high and low (xDrip, for instance) get a three-band breakdown instead of five.
+reports. On Nightscout they are the site's own settings:
+`bgTargetBottom`/`bgTargetTop` bound the in-range band, `bgLow`/`bgHigh` the
+very low/very high ones. Backends that report only a hard high and low (xDrip,
+for instance) get a three-band breakdown instead of five.
+
+The override keys above change that, exactly as they do in the GUI: `wizard.*`
+back-fill backends that report no limits, then any `override.*` value replaces
+the backend's — whatever the GUI's override checkbox says, since the GUI
+applies them the same way. The result feeds every threshold consumer alike:
+the graph and sparkline colors, the stats bands and the `--check` exit codes.
+A personal bound that meets the hard limit folds its band away rather than
+print an empty `10.0-10.0` row.
 
 Percentages are shares of the readings in the period, and each band's duration
 is its share counted at the backend's reporting interval. The `coverage` figure
@@ -126,10 +148,11 @@ trndi-cli exits with a distinct code and a message on stderr:
 | `4` | No recent reading | Backend reachable but silent > 24 h (with `--stats`: nothing in the requested window; with `--check`: also a stale fallback, so scripts never alarm on old data) — check the uploader |
 | `5` | Above the high threshold | Only from `--check` — an answer, not an error |
 | `6` | Below the low threshold | Only from `--check` — an answer, not an error |
-| `64` | Bad command line | Unknown option, a `--stats` window outside 1–168 hours, or `--setup` without a terminal |
+| `64` | Bad command line | Unknown option, a `--stats` or `--spark` window outside its range, or `--setup` without a terminal |
 
-`--check` prints the same line as a plain run; the exit code uses the backend's
-own thresholds, the ones the graph colors and `--stats` bands come from. A
+`--check` prints the same line as a plain run; the exit code uses the same
+thresholds the graph colors and `--stats` bands come from — the backend's own,
+as adjusted by any overrides. A
 personal target range narrower than the hard limits does not trip it — like the
 graph, only red and blue count.
 

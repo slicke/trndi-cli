@@ -62,12 +62,20 @@ Objects, Drivers, Views, Dialogs, App, Menus, MsgBox, FVConsts, Video,
 trndi.native.console, trndi.api.registry;
 
 type
-  {** The four values trndi-cli shares with the GUI. }
+  {** The values trndi-cli shares with the GUI. }
   TCliSettings = record
     backend: string;                    // stable code, '' when unconfigured
     target: string;                     // site URL, account name or e-mail
     creds: string;                      // secret, token or password
     mmol: boolean;                      // display unit
+    // User thresholds in mg/dL, 0 when not set. wizHi/wizLo back-fill
+    // backends that report no limits of their own; the ovr* values apply on
+    // top of whatever the backend reports, in the same way the GUI applies
+    // them (umain_init.inc). The range pair is honoured but has no field in
+    // the settings window.
+    wizHi, wizLo: integer;
+    ovrHi, ovrLo: integer;
+    ovrRangeHi, ovrRangeLo: integer;
   end;
 
 {** Where the settings live, for messages and the window's footer. }
@@ -128,7 +136,7 @@ type
 const
   cmTest = 1100;                        // "Test" button inside the dialog
   DLG_W = 68;                           // the window needs this much terminal
-  DLG_H = 18;                           // ... and this many rows
+  DLG_H = 21;                           // ... and this many rows
   FIELD_MAX = 255;                      // TInputLine data is a shortstring
 
 type
@@ -222,6 +230,13 @@ begin
     Result.creds := native.GetSetting('remote.creds');
     // Anything but 'mmol' means mg/dL, as the GUI reads it.
     Result.mmol := native.GetSetting('unit', 'mmol') = 'mmol';
+    // A missing or blank key parses to 0, the "not set" value.
+    Result.wizHi := StrToIntDef(native.GetSetting('wizard.hi'), 0);
+    Result.wizLo := StrToIntDef(native.GetSetting('wizard.lo'), 0);
+    Result.ovrHi := StrToIntDef(native.GetSetting('override.hi'), 0);
+    Result.ovrLo := StrToIntDef(native.GetSetting('override.lo'), 0);
+    Result.ovrRangeHi := StrToIntDef(native.GetSetting('override.rangehi'), 0);
+    Result.ovrRangeLo := StrToIntDef(native.GetSetting('override.rangelo'), 0);
   finally
     native.Free;
   end;
@@ -241,6 +256,18 @@ begin
       native.SetSetting('unit', 'mmol')
     else
       native.SetSetting('unit', 'mgdl');
+    // A cleared limit is written as an empty value: that reads back as "not
+    // set" here, and the GUI's GetIntSetting falls back to its default on it
+    // too. Only the pair the settings window edits is written; the wizard and
+    // range keys stay whatever the GUI made them.
+    if s.ovrHi > 0 then
+      native.SetSetting('override.hi', IntToStr(s.ovrHi))
+    else
+      native.SetSetting('override.hi', '');
+    if s.ovrLo > 0 then
+      native.SetSetting('override.lo', IntToStr(s.ovrLo))
+    else
+      native.SetSetting('override.lo', '');
   finally
     native.Free;
   end;
@@ -343,6 +370,52 @@ begin
   end;
 end;
 
+// The limit fields are typed and shown in the display unit but stored the way
+// the GUI stores them: mg/dL integers under override.hi / override.lo. 0 is
+// "not set" throughout; the conversion is linear, so round-tripping through
+// one decimal of mmol/L stays on the same mg/dL value.
+function FormatLimit(mgdlVal: integer; asMmol: boolean): string;
+var
+  fs: TFormatSettings;
+begin
+  if mgdlVal <= 0 then
+    exit('');
+  if asMmol then
+  begin
+    fs := DefaultFormatSettings;
+    fs.DecimalSeparator := '.';
+    Result := FormatFloat('0.0', mgdlVal * TrndiAPI.toMMOL, fs);
+  end
+  else
+    Result := IntToStr(mgdlVal);
+end;
+
+// '' parses to 0, "not set". False only for text that is not a number; both
+// decimal separators are accepted, whatever the locale thinks.
+function ParseLimit(const text: string; asMmol: boolean;
+out mgdlVal: integer): boolean;
+var
+  s: string;
+  f: double;
+  fs: TFormatSettings;
+begin
+  mgdlVal := 0;
+  Result := true;
+  s := Trim(text);
+  if s = '' then
+    exit;
+  fs := DefaultFormatSettings;
+  fs.DecimalSeparator := '.';
+  fs.ThousandSeparator := #0;
+  s := StringReplace(s, ',', '.', [rfReplaceAll]);
+  if (not TryStrToFloat(s, f, fs)) or (f <= 0) then
+    exit(false);
+  if asMmol then
+    mgdlVal := round(f / TrndiAPI.toMMOL)
+  else
+    mgdlVal := round(f);
+end;
+
 function CredMessage(err: TBackendCredError): string;
 begin
   case err of
@@ -401,6 +474,7 @@ type
     lineTarget: PInputLine;
     lineCreds: PSecretLine;
     unitBox: PRadioButtons;
+    lineHi, lineLo: PInputLine;
     constructor Init(const cur: TCliSettings);
     function Valid(Command: word): boolean; virtual;
     procedure HandleEvent(var Event: TEvent); virtual;
@@ -534,8 +608,26 @@ begin
   R.Assign(34, 7, 65, 8);
   Insert(New(PLabel, Init(R, '~U~nit', unitBox)));
 
+  // Threshold overrides, in the display unit. These write the override.hi/lo
+  // keys the GUI applies too, so the two apps color by the same limits; blank
+  // leaves the backend's own thresholds in charge.
+  R.Assign(34, 11, 49, 12);
+  lineHi := New(PInputLine, Init(R, 8));
+  Insert(lineHi);
+  R.Assign(34, 10, 49, 11);
+  Insert(New(PLabel, Init(R, '~H~igh limit', lineHi)));
+
+  R.Assign(50, 11, 65, 12);
+  lineLo := New(PInputLine, Init(R, 8));
+  Insert(lineLo);
+  R.Assign(50, 10, 65, 11);
+  Insert(New(PLabel, Init(R, 'Lo~w~ limit', lineLo)));
+
+  R.Assign(35, 12, 65, 13);
+  Insert(New(PStaticText, Init(R, 'Blank = the backend''s limits')));
+
   // Hint line: what the two fields mean for the selected backend
-  R.Assign(3, 11, 65, 13);
+  R.Assign(3, 14, 65, 16);
   hint := New(PStaticText, Init(R, ''));
   Insert(hint);
 
@@ -544,16 +636,16 @@ begin
   loc := SettingsLocation;
   if Length(loc) > 52 then
     loc := '...' + Copy(loc, Length(loc) - 48, MaxInt);
-  R.Assign(3, 13, 65, 14);
+  R.Assign(3, 16, 65, 17);
   Insert(New(PStaticText, Init(R, 'Saved in ' + loc)));
 
   // Buttons: Test connects with the values on screen without saving them.
   // Equal widths, right edge lined up with the fields above.
-  R.Assign(30, 15, 41, 16);
+  R.Assign(30, 18, 41, 19);
   Insert(New(PDlgButton, Init(R, '~O~K', cmOK, bfDefault)));
-  R.Assign(42, 15, 53, 16);
+  R.Assign(42, 18, 53, 19);
   Insert(New(PDlgButton, Init(R, '~T~est', cmTest, bfNormal)));
-  R.Assign(54, 15, 65, 16);
+  R.Assign(54, 18, 65, 19);
   Insert(New(PDlgButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
 
   // Fill in the current configuration. Debug backends are left out: they
@@ -577,6 +669,8 @@ begin
   list^.FocusItem(sel);
 
   SetLineText(lineTarget, cur.target);
+  SetLineText(lineHi, FormatLimit(cur.ovrHi, cur.mmol));
+  SetLineText(lineLo, FormatLimit(cur.ovrLo, cur.mmol));
   if cur.mmol then
     unitBox^.Value := 0
   else
@@ -597,7 +691,9 @@ end;
 
 function TSetupDialog.Valid(Command: word): boolean;
 var
-  addr, msg: string;
+  addr, msg, u: string;
+  asMmol: boolean;
+  hiV, loV: integer;
 begin
   Result := inherited Valid(Command);
   if (not Result) or (Command <> cmOK) then
@@ -615,6 +711,35 @@ begin
   if msg <> '' then
   begin
     ShowError(msg);
+    exit(false);
+  end;
+
+  // The limits are read in whatever unit is selected right now, so a value
+  // typed before switching the radio button means what the radio says on OK.
+  asMmol := unitBox^.Value = 0;
+  if asMmol then
+    u := BG_UNIT_NAMES[mmol]
+  else
+    u := BG_UNIT_NAMES[mgdl];
+  if (not ParseLimit(lineHi^.Data^, asMmol, hiV)) or
+    (not ParseLimit(lineLo^.Data^, asMmol, loV)) then
+  begin
+    ShowError('The limits must be numbers in ' + u + ', or blank for the ' +
+      'backend''s own.');
+    exit(false);
+  end;
+  // 36-450 mg/dL is 2.0-25.0 mmol/L: past anything a CGM reports, the value
+  // is far more likely a unit mix-up than a choice.
+  if ((hiV > 0) and ((hiV < 36) or (hiV > 450))) or
+    ((loV > 0) and ((loV < 36) or (loV > 450))) then
+  begin
+    ShowError(Format('Limits must be between %s and %s %s.',
+      [FormatLimit(36, asMmol), FormatLimit(450, asMmol), u]));
+    exit(false);
+  end;
+  if (hiV > 0) and (loV > 0) and (loV >= hiV) then
+  begin
+    ShowError('The low limit must be below the high limit.');
     exit(false);
   end;
 end;
@@ -685,10 +810,14 @@ begin
   try
     if Desktop^.ExecView(dlg) = cmOK then
     begin
+      next := cur;                      // keep what the dialog does not edit
       next.backend := dlg^.list^.SelectedCode;
       next.target := Trim(dlg^.lineTarget^.Data^);
       next.creds := Trim(dlg^.lineCreds^.Data^);
       next.mmol := dlg^.unitBox^.Value = 0;
+      // Already validated by Valid; blank parses to 0, which clears the key.
+      ParseLimit(dlg^.lineHi^.Data^, next.mmol, next.ovrHi);
+      ParseLimit(dlg^.lineLo^.Data^, next.mmol, next.ovrLo);
       StoreSettings(next, next.creds <> '');
       Result := true;
     end;
