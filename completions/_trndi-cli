@@ -14,6 +14,6 @@ _arguments -s \
   "($modes)"{-g,--graph}'[interactive TUI with a reading graph (F5 refreshes)]' \
   "($modes)"{-s,--stats}'[summarise the last H hours (default 24)]::hours (1-168):' \
   "($modes)--spark[the last H hours as a sparkline (default 3)]::hours (1-24):" \
-  '--no-predict[graph mode: start without the forecast (F6 toggles)]' \
+  '--predict[graph mode: start with the forecast drawn (F6 toggles)]' \
   "($modes)--setup[settings window: backend, address, secret, unit, limits]" \
   '(- *)'{-h,--help}'[show help]'

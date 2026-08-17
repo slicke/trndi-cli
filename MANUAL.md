@@ -160,12 +160,13 @@ graph, only red and blue count.
 
 A reading older than ~10 minutes is still printed, marked `[stale, N min old]`.
 
-**No forecast in graph mode** — that is usually the intended answer rather than a
-fault. The forecast is left out when the trend is flat (a straight line ahead
-carries no information), when the model's own confidence in the fit falls below
-50%, when the window is too narrow to spare a quarter of the plot, and of course
-under `--no-predict`. `F6` toggles it. Note that producing one costs a second
-request per refresh, which is worth knowing on backends that rate-limit
-aggressively — LibreLinkUp in particular.
+**No forecast in graph mode** — the forecast is opt-in: `F6` turns it on, or
+start with `--predict`. Even then it is left out when the trend is flat (a
+straight line ahead carries no information), when the model's own confidence in
+the fit falls below 50%, or when the window is too narrow to spare a quarter of
+the plot. Note that producing one costs a second request per refresh, which is
+worth knowing on backends that rate-limit aggressively — LibreLinkUp in
+particular. (`--no-predict`, the opt-out from when the forecast was on by
+default, is still accepted.)
 
 > ⚠️ **Medical disclaimer**: trndi-cli is NOT a medical device. Data may be delayed, inaccurate or unavailable. Never make medical decisions based on this software — verify with official devices.

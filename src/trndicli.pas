@@ -95,10 +95,18 @@ var
   gLastFetch: QWord = 0;
   gStatus: string = '';
   gPredictions: BGResults = nil;
-  gPredictEnabled: boolean = true;
+  // The forecast is opt-in (--predict or F6): model output next to measured
+  // data confuses more than it helps someone who did not ask for it.
+  gPredictEnabled: boolean = false;
   gPredictOK: boolean = false;
   gPredictConf: double = 0;
   gPredictStable: boolean = false;
+  // Graph-mode cursor: index into gReadings while the arrow keys browse the
+  // history, -1 when the header shows the live reading. gFirstVis is the
+  // oldest index the last Draw fit on screen, so the cursor stops at the
+  // window's left edge instead of walking onto readings that are not drawn.
+  gSel: integer = -1;
+  gFirstVis: integer = 0;
 
 function TrndiAppName: string;
 begin
@@ -269,13 +277,32 @@ end;
 
 // Graph mode data: history, the current reading and the forecast.
 procedure FetchAll;
+var
+  selDate: TDateTime;
+  i: integer;
 begin
+  // Keep an active cursor anchored to its reading, not its index: a refresh
+  // (the 5-minute poll included) shifts every index as new readings arrive.
+  selDate := 0;
+  if (gSel >= 0) and (gSel <= High(gReadings)) then
+    selDate := gReadings[gSel].date;
   FetchCurrent;
   gReadings := gApi.getReadings(GRAPH_SPAN_MIN, GRAPH_MAX_READINGS);
   SortReadingsAscending(gReadings);
   FetchPredictions;
   gLastFetch := GetTickCount64;
   gStatus := 'updated ' + FormatDateTime('hh:nn:ss', Now);
+  if selDate > 0 then
+  begin
+    // Rolled out of the fetch window entirely: back to live.
+    gSel := -1;
+    for i := High(gReadings) downto 0 do
+      if abs(gReadings[i].date - selDate) < 1 / SecsPerDay then
+      begin
+        gSel := i;
+        break;
+      end;
+  end;
 end;
 
 {------------------------------------------------------------------------------
@@ -348,6 +375,7 @@ var
   minV, maxV, pad, v, step, band, rowTop, tick: double;
   isTick: boolean;
   lbl: string;
+  attr: byte;
 
   // Map a value onto the current row's half-steps and emit the right glyph.
   procedure PlotCell(col: integer; value: double; attr: byte; full, half: char);
@@ -368,6 +396,9 @@ begin
   gh := Size.Y - 2; // row 0 is the header, the last row the time legend
   gw := Size.X - MARGIN;
 
+  if gSel > High(gReadings) then
+    gSel := High(gReadings);  // history shrank under the cursor (-1 if empty)
+
   // Split the plot between history and forecast. The forecast never takes
   // more than a quarter of the width: on a narrow window shorten the horizon
   // rather than crowd out measured data, and drop it entirely once even that
@@ -382,17 +413,28 @@ begin
   else
     histW := gw;
 
-  // Header
+  // Header: the reading under the cursor while the arrow keys browse the
+  // history, the live line otherwise. The cursor's column is the one drawn
+  // in white below.
   MoveChar(B, ' ', attrText, Size.X);
-  lbl := ' ' + CurrentLine(false);
-  if gStatus <> '' then
-    lbl := lbl + '  -  ' + gStatus;
-  if (pn > 0) and (Length(gReadings) > 0) then
+  if gSel >= 0 then
+    lbl := ' ' + FormatDateTime('hh:nn', gReadings[gSel].date) + '  ' +
+      gReadings[gSel].format(gUnit, BG_MSG_DEF) +
+      '  -  arrow keys browse, Esc returns to live'
+  else
   begin
-    horizon := round((gPredictions[pn - 1].date - gReadings[High(gReadings)].date)
-      * 24 * 60);
-    lbl := lbl + Format('  -  %s +%d min %.0f%%',
-      [chPredFull, horizon, gPredictConf * 100]);
+    lbl := ' ' + CurrentLine(false);
+    if gStatus <> '' then
+      lbl := lbl + '  -  ' + gStatus;
+    if (pn > 0) and (Length(gReadings) > 0) then
+    begin
+      horizon := round((gPredictions[pn - 1].date - gReadings[High(gReadings)].date)
+        * 24 * 60);
+      // Say "forecast" outright: a bare shade glyph with a percentage reads
+      // as noise to anyone who has not met the shaded bars yet.
+      lbl := lbl + Format('  -  forecast %s +%d min %.0f%%',
+        [chPredFull, horizon, gPredictConf * 100]);
+    end;
   end;
   MoveStr(B, Copy(lbl, 1, Size.X), attrText);
   WriteLine(0, 0, Size.X, 1, B);
@@ -417,6 +459,7 @@ begin
   first := Length(gReadings) - histW;
   if first < 0 then
     first := 0;
+  gFirstVis := first;  // the cursor's left stop, see HandleEvent
 
   // Scale across everything drawn, forecast included so it cannot clip,
   // padded so bars never touch the edges.
@@ -489,14 +532,18 @@ begin
         MoveChar(B[MARGIN + x], #250, attrLabel, 1);
     end;
 
-    // Bars: value mapped to half-block steps from the bottom
+    // Bars: value mapped to half-block steps from the bottom. The cursor's
+    // column trades its level color for white — the header carries the value.
     for x := 0 to histW - 1 do
     begin
       i := first + x;
       if i > High(gReadings) then
         break;
-      PlotCell(MARGIN + x, gReadings[i].convert(gUnit),
-        LevelAttr(gApi.getLevel(gReadings[i].convert(mgdl))), chFull, chHalf);
+      if i = gSel then
+        attr := attrText
+      else
+        attr := LevelAttr(gApi.getLevel(gReadings[i].convert(mgdl)));
+      PlotCell(MARGIN + x, gReadings[i].convert(gUnit), attr, chFull, chHalf);
     end;
 
     // Forecast, past the "now" divider: same geometry and level colors, drawn
@@ -526,6 +573,9 @@ begin
     MoveStr(B[MARGIN + x], FormatDateTime('hh:nn', gReadings[i].date), attrLabel);
     Inc(x, 15);
   end;
+  // Cursor marker under its column, on top of any time label there.
+  if (gSel >= first) and (gSel - first < histW) then
+    MoveChar(B[MARGIN + gSel - first], '^', attrText, 1);
   WriteLine(0, Size.Y - 1, Size.X, 1, B);
 end;
 
@@ -561,13 +611,17 @@ var
 begin
   GetExtent(R);
   R.A.Y := R.B.Y - 1;
+  // The last entry is display only (kbNoKey maps nothing): the arrow keys
+  // reach HandleEvent on their own, this just says they do something.
+  // #27#26 are CP437's left/right arrows, same route as the block glyphs.
   StatusLine := New(PStatusLine, Init(R,
     NewStatusDef(0, $FFFF,
       NewStatusKey('~Alt-X~ Exit', kbAltX, cmQuit,
       NewStatusKey('~F5~ Refresh', kbF5, cmRefresh,
       NewStatusKey('~F6~ Forecast', kbF6, cmPredict,
       NewStatusKey('~F9~ Settings', kbF9, cmSetup,
-      nil)))),
+      NewStatusKey('~'#27#26'~ Inspect', kbNoKey, 0,
+      nil))))),
     nil)));
 end;
 
@@ -622,6 +676,45 @@ begin
     if ExecSetupDialog then
       ReloadBackend;
     // Redraw either way: the dialog covered the graph while it was open.
+    if GraphWin <> nil then
+      GraphWin^.Redraw;
+    ClearEvent(Event);
+  end
+  else if Event.What = evKeyDown then
+  begin
+    // The reading cursor. One column per reading, so Left/Right step one
+    // reading at a time; the left stop is the oldest column on screen —
+    // older readings exist but have no column to put the cursor on.
+    if Length(gReadings) = 0 then
+      exit;
+    case Event.KeyCode of
+    kbLeft:
+      if gSel < 0 then
+        gSel := High(gReadings)
+      else if gSel > gFirstVis then
+        Dec(gSel);
+    kbRight:
+      if gSel < 0 then
+        exit
+      else
+      begin
+        // Stepping past the newest reading lands back on the live header.
+        Inc(gSel);
+        if gSel > High(gReadings) then
+          gSel := -1;
+      end;
+    kbHome:
+      gSel := gFirstVis;
+    kbEnd:
+      gSel := High(gReadings);
+    kbEsc:
+      if gSel < 0 then
+        exit
+      else
+        gSel := -1;
+    else
+      exit;
+    end;
     if GraphWin <> nil then
       GraphWin^.Redraw;
     ClearEvent(Event);
@@ -1094,12 +1187,13 @@ begin
   writeln('Prints the current CGM reading from the backend configured in Trndi.');
   writeln;
   writeln('  -c, --check      as above, with the range in the exit code: 5 high, 6 low');
-  writeln('  -g, --graph      interactive TUI with a reading graph (F5 refreshes)');
+  writeln('  -g, --graph      interactive TUI with a reading graph (F5 refreshes,');
+  writeln('                   arrow keys inspect single readings)');
   writeln(Format('  -s, --stats [H]  summarise the last H hours (default %d, max %d)',
     [STATS_DEFAULT_HOURS, STATS_MAX_HOURS]));
   writeln(Format('      --spark [H]  the last H hours as a sparkline (default %d, max %d)',
     [SPARK_DEFAULT_HOURS, SPARK_MAX_HOURS]));
-  writeln('      --no-predict graph mode: start without the forecast (F6 toggles)');
+  writeln('      --predict    graph mode: start with the forecast drawn (F6 toggles)');
   writeln('      --setup      settings window: backend, address, secret, unit, limits');
   writeln('  -h, --help       show this help');
 end;
@@ -1184,7 +1278,11 @@ begin
     end;
     '-c', '--check':
       checkMode := true;
+    '--predict':
+      gPredictEnabled := true;
     '--no-predict':
+      // The old default was forecast-on with this as the opt-out; accepted
+      // silently so existing scripts keep working.
       gPredictEnabled := false;
     '--setup':
       setupMode := true;
