@@ -83,6 +83,11 @@ const
   // reading); Draw shows the newest readings that fit the window.
   GRAPH_SPAN_MIN = 480;               // minutes of history in the graph
   GRAPH_MAX_READINGS = 480;           // covers 8 h even for 1-min uploaders
+  // Dexcom Share refuses anything above its own window instead of serving
+  // what it can: 24 h, and 288 readings at the 5-minute cadence it assumes.
+  // FetchReadingsSafe retries inside these when a backend throws.
+  SHARE_MAX_MINUTES = MinsPerDay;
+  SHARE_MAX_READINGS = 288;
   // Half an hour ahead, matching the GUI's overlay. The model knows nothing
   // about insulin or carbs, so a longer horizon would only look precise.
   PREDICT_COUNT = 6;
@@ -127,6 +132,10 @@ var
   gReadings: BGResults = nil;
   gLastFetch: QWord = 0;
   gStatus: string = '';
+  // Why the last FetchReadingsSafe came back empty ('' = it did not fail).
+  gFetchErr: string = '';
+  // ... and the same for the current-reading fetch.
+  gCurrentErr: string = '';
   gPredictions: BGResults = nil;
   // The forecast is opt-in (--predict or F6): model output next to measured
   // data confuses more than it helps someone who did not ask for it.
@@ -275,15 +284,28 @@ begin
 end;
 
 // Fetch the current reading; falls back to the last reading in a wider
-// window, flagging it stale.
+// window, flagging it stale. Reports rather than raises, on the same grounds
+// as FetchReadingsSafe: under the TUI there is nowhere for an exception to
+// go but through the screen.
 procedure FetchCurrent;
 begin
-  gHaveCurrent := gApi.getCurrent(gCurrent);
+  gCurrentErr := '';
+  gHaveCurrent := false;
   gStale := false;
-  if not gHaveCurrent then
-  begin
-    gHaveCurrent := gApi.getLast(gCurrent);
-    gStale := gHaveCurrent;
+  try
+    gHaveCurrent := gApi.getCurrent(gCurrent);
+    if not gHaveCurrent then
+    begin
+      gHaveCurrent := gApi.getLast(gCurrent);
+      gStale := gHaveCurrent;
+    end;
+  except
+    on E: Exception do
+    begin
+      gCurrentErr := E.Message;
+      gHaveCurrent := false;
+      gStale := false;
+    end;
   end;
 end;
 
@@ -323,7 +345,18 @@ begin
   SetLength(gPredictions, 0);
   if (not gPredictEnabled) or (Length(gReadings) = 0) then
     exit;
-  gPredictOK := gApi.predictReadings(PREDICT_COUNT, gPredictions);
+  try
+    gPredictOK := gApi.predictReadings(PREDICT_COUNT, gPredictions);
+  except
+    // The forecast is an extra: a failed one drops the overlay, it does not
+    // cost the graph that was fetched successfully.
+    on Exception do
+    begin
+      gPredictOK := false;
+      SetLength(gPredictions, 0);
+      exit;
+    end;
+  end;
   // Snapshot right away: both properties describe the most recent
   // predictReadings call on the shared api object.
   gPredictConf := gApi.predictionConfidence;
@@ -332,20 +365,52 @@ end;
 
 // getReadings, with the request clamped to Dexcom Share's hard caps on
 // failure: the Dexcom backends raise above (1440 min, 288 readings) rather
-// than serving what they can — nothing else in the API layer throws here —
-// and an unhandled exception would take the whole TUI down with it.
+// than serving what they can. Backends that serve weeks (Tandem, CareLink)
+// answer the wide request, so the caps are a fallback rather than a ceiling
+// applied up front.
+//
+// Never propagates: a request that fails even clamped — a dropped
+// connection, an expired session — leaves the reason in gFetchErr and
+// returns nothing, so callers report it. An exception escaping here would
+// take the whole TUI down with it, terminal state and all.
 function FetchReadingsSafe(minutes, maxN: integer): BGResults;
+var
+  clampedMin, clampedMax: integer;
 begin
+  Result := nil;
+  gFetchErr := '';
   try
     Result := gApi.getReadings(minutes, maxN);
+    exit;
   except
-    on Exception do
+    on E: Exception do
+      gFetchErr := E.Message;
+  end;
+
+  clampedMin := minutes;
+  clampedMax := maxN;
+  if clampedMin > SHARE_MAX_MINUTES then
+    clampedMin := SHARE_MAX_MINUTES;
+  if clampedMax > SHARE_MAX_READINGS then
+    clampedMax := SHARE_MAX_READINGS;
+  // The same guard rejects a request for nothing, so keep the floor too.
+  if clampedMin < 1 then
+    clampedMin := 1;
+  if clampedMax < 1 then
+    clampedMax := 1;
+  // Already within the caps: whatever went wrong was not the request size,
+  // so repeating it verbatim would only cost a second round trip.
+  if (clampedMin = minutes) and (clampedMax = maxN) then
+    exit;
+
+  try
+    Result := gApi.getReadings(clampedMin, clampedMax);
+    gFetchErr := '';
+  except
+    on E: Exception do
     begin
-      if minutes > MinsPerDay then
-        minutes := MinsPerDay;
-      if maxN > 288 then
-        maxN := 288;
-      Result := gApi.getReadings(minutes, maxN);
+      gFetchErr := E.Message;
+      Result := nil;
     end;
   end;
 end;
@@ -366,7 +431,10 @@ begin
   SortReadingsAscending(gReadings);
   FetchPredictions;
   gLastFetch := GetTickCount64;
-  gStatus := 'updated ' + FormatDateTime('hh:nn:ss', Now);
+  if gFetchErr <> '' then
+    gStatus := 'fetch failed: ' + gFetchErr
+  else
+    gStatus := 'updated ' + FormatDateTime('hh:nn:ss', Now);
   if selDate > 0 then
   begin
     // Rolled out of the fetch window entirely: back to live.
@@ -466,14 +534,11 @@ begin
     interval := 5;
   span := days * MinsPerDay;
   maxN := span div interval + 16;   // slack for backends counting from "now"
-  try
-    readings := FetchReadingsSafe(span, maxN);
-  except
-    on E: Exception do
-    begin
-      gAgpErr := 'history fetch failed: ' + E.Message;
-      exit;
-    end;
+  readings := FetchReadingsSafe(span, maxN);
+  if gFetchErr <> '' then
+  begin
+    gAgpErr := 'history fetch failed: ' + gFetchErr;
+    exit;
   end;
 
   for b := 0 to AGP_BUCKETS - 1 do
@@ -1360,7 +1425,10 @@ begin
 
   if n = 0 then
   begin
-    writeln(stderr, Format('No readings in the last %d h.', [hours]));
+    if gFetchErr <> '' then
+      writeln(stderr, 'History fetch failed: ', gFetchErr)
+    else
+      writeln(stderr, Format('No readings in the last %d h.', [hours]));
     halt(4);
   end;
 
@@ -1555,7 +1623,10 @@ begin
 
   if n = 0 then
   begin
-    writeln(stderr, Format('No readings in the last %d h.', [hours]));
+    if gFetchErr <> '' then
+      writeln(stderr, 'History fetch failed: ', gFetchErr)
+    else
+      writeln(stderr, Format('No readings in the last %d h.', [hours]));
     halt(4);
   end;
 
@@ -1813,7 +1884,10 @@ begin
   FetchCurrent;
   if not gHaveCurrent then
   begin
-    writeln(stderr, 'No reading available: ', gApi.errormsg);
+    if gCurrentErr <> '' then
+      writeln(stderr, 'No reading available: ', gCurrentErr)
+    else
+      writeln(stderr, 'No reading available: ', gApi.errormsg);
     halt(4);
   end;
   writeln(CurrentLine);
