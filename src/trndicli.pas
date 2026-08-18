@@ -1104,12 +1104,13 @@ var
 begin
   GetExtent(R);
   R.A.Y := R.B.Y - 1;
-  // The last entry is display only (kbNoKey maps nothing): the arrow keys
-  // reach HandleEvent on their own, this just says they do something.
+  // The first and last entries are display only (kbNoKey maps nothing): the
+  // exit keys and the arrow keys reach HandleEvent on their own, these just
+  // say they do something.
   // #27#26 are CP437's left/right arrows, same route as the block glyphs.
   StatusLine := New(PStatusLine, Init(R,
     NewStatusDef(0, $FFFF,
-      NewStatusKey('~Alt-X~ Exit', kbAltX, cmQuit,
+      NewStatusKey('~Q~ Exit', kbNoKey, 0,
       NewStatusKey('~F5~ Refresh', kbF5, cmRefresh,
       NewStatusKey('~F6~ Forecast', kbF6, cmPredict,
       NewStatusKey('~F7~ AGP', kbF7, cmAGP,
@@ -1227,6 +1228,19 @@ begin
   end
   else if Event.What = evKeyDown then
   begin
+    // Leaving. Free Vision's own exit key is Alt-X, but Haiku hands Alt to
+    // the system as its command modifier — its Terminal answers Alt-X itself
+    // and the application never sees it — so the key bar advertises plain Q,
+    // which no terminal claims, and Alt-X and Ctrl-X keep working for the
+    // fingers that already know them. Nothing here reads text, so a bare
+    // letter is free: the settings window is modal and takes its own keys.
+    if (Event.KeyCode = kbAltX) or (Event.KeyCode = kbCtrlX) or
+      (UpCase(Event.CharCode) = 'Q') then
+    begin
+      ClearEvent(Event);
+      EndModal(cmQuit);
+      exit;
+    end;
     if gAgpMode then
     begin
       // The bucket cursor: same moves as the reading cursor below, over the
@@ -1915,7 +1929,7 @@ begin
   writeln;
   writeln('  -c, --check      as above, with the range in the exit code: 5 high, 6 low');
   writeln('  -g, --graph      interactive TUI with a reading graph (F5 refreshes,');
-  writeln('                   arrow keys inspect single readings)');
+  writeln('                   arrow keys inspect single readings, Q exits)');
   writeln(Format('  -s, --stats [H]  summarise the last H hours (default %d, max %d)',
     [STATS_DEFAULT_HOURS, STATS_MAX_HOURS]));
   writeln(Format('      --spark [H]  the last H hours as a sparkline (default %d, max %d)',

@@ -19,7 +19,7 @@ With `--graph`, a Free Vision text UI shows the last hours as a bar graph — re
 
 ![The graph mode: eight hours of readings as coloured bars, with a shaded forecast past the divider on the right](doc/img/graph.png)
 
-`F5` refetches, `F9` opens the settings window and `Alt-X` leaves; the key bar sits along the bottom of the terminal.
+`F5` refetches, `F9` opens the settings window and `Q` leaves (`Alt-X` and `Ctrl-X` do too); the key bar sits along the bottom of the terminal.
 The arrow keys walk a cursor across the bars — the header shows the exact value and time of the highlighted reading, `Home`/`End` jump to the oldest and newest — and stepping right past the newest reading (or `Esc`) returns the header to the live view. A refresh keeps the cursor on its reading.
 
 `F6` (or starting with `--predict`) adds a half-hour forecast past a divider on the right, drawn in shade rather than solid so it never reads as measured data. It comes from Trndi's own prediction model — a robust weighted regression with a curvature term — and appears only when the fit is worth showing: a flat trend or a noisy sensor leaves it out entirely, and the header carries the horizon and the model's own confidence (`forecast ▒ +30 min 66%`). It is off by default and knows nothing about insulin or carbs, so treat it as the shape of the last half hour continued, not a plan.
@@ -47,7 +47,7 @@ The profile needs several days of history in one request, which the backend deci
 trndi-cli               print the current reading and exit
 trndi-cli --check       ... with the range in the exit code, for scripts
 trndi-cli --graph       interactive TUI graph (arrows inspect readings, F5 refresh,
-                        F6 forecast, F7 AGP, F9 settings, Alt-X exit)
+                        F6 forecast, F7 AGP, F9 settings, Q exits)
 trndi-cli --predict     ... with the forecast drawn from the start
 trndi-cli --stats       summarise the last 24 h
 trndi-cli --stats 6     ... or any window from 1 to 168 hours
