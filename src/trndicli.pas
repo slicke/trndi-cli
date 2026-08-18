@@ -1548,7 +1548,9 @@ var
   mode: DWORD;
 {$ENDIF}
 begin
-  if GetEnvironmentVariable('NO_COLOR') <> '' then
+  // Qualified: the Windows unit's three-argument WinAPI import would win the
+  // overload otherwise, since it is pulled in after SysUtils.
+  if SysUtils.GetEnvironmentVariable('NO_COLOR') <> '' then
     exit(false);
 {$IFDEF WINDOWS}
   h := GetStdHandle(STD_OUTPUT_HANDLE);
