@@ -16,5 +16,6 @@ _arguments -s \
   "($modes)--spark[the last H hours as a sparkline (default 3)]::hours (1-24):" \
   "($modes)--agp[time-of-day glucose profile of the last D days (default 14)]::days (3-28):" \
   '--predict[graph mode: start with the forecast drawn (F6 toggles)]' \
+  {-p,--profile}'[use this multi-user account (bare: list accounts)]::account:{compadd ${(f)"$(trndi-cli --profile 2>/dev/null)"}}' \
   "($modes)--setup[settings window: backend, address, secret, unit, limits]" \
   '(- *)'{-h,--help}'[show help]'

@@ -49,7 +49,9 @@
   the reading sits: 0 in range, 5 high, 6 low.
 
   Settings are read from the GUI's config (~/.config/Trndi.cfg on Linux), so
-  a machine with a configured Trndi needs no setup.
+  a machine with a configured Trndi needs no setup. With --profile every mode
+  runs against one of the GUI's multi-user accounts instead of the default
+  one; a bare --profile lists them.
 }
 program trndicli;
 
@@ -1077,7 +1079,12 @@ var
   IR: TRect;
   gv: PBGGraphView;
 begin
-  inherited Init(R, 'Trndi', wnNoNumber);
+  // The account in the frame title, so two graphs side by side on the same
+  // machine are tellable apart; the default account keeps the plain name.
+  if ActiveProfileName <> '' then
+    inherited Init(R, 'Trndi - ' + ActiveProfileName, wnNoNumber)
+  else
+    inherited Init(R, 'Trndi', wnNoNumber);
   // The window fills the desktop and has to keep doing so when the terminal
   // changes size under it (see TTrndiTui.Idle).
   GrowMode := gfGrowHiX + gfGrowHiY;
@@ -1884,7 +1891,13 @@ begin
     halt(64);
   end;
   if RunSetup then
-    writeln('Settings saved in ', SettingsLocation, '.')
+  begin
+    if ActiveProfileName <> '' then
+      writeln('Settings saved for "', ActiveProfileName, '" in ',
+        SettingsLocation, '.')
+    else
+      writeln('Settings saved in ', SettingsLocation, '.');
+  end
   else
     writeln('Settings unchanged.');
 end;
@@ -1921,6 +1934,18 @@ begin
   end;
 end;
 
+// Bare --profile: the accounts this machine's settings hold, one per line —
+// plain names, so a script can pick one. 'default' always exists; the rest
+// are the GUI's multi-user accounts (or ones --setup --profile created).
+procedure RunProfileList;
+var
+  n: string;
+begin
+  writeln('default');
+  for n in ProfileNames do
+    writeln(n);
+end;
+
 // A new option added here also goes in the three files under completions/.
 procedure Usage;
 begin
@@ -1938,6 +1963,8 @@ begin
   writeln(Format('                   percentile bands (default %d, max %d; F7 in graph mode)',
     [AGP_DEFAULT_DAYS, AGP_MAX_DAYS]));
   writeln('      --predict    graph mode: start with the forecast drawn (F6 toggles)');
+  writeln('  -p, --profile N  use account N of the GUI''s multi-user mode; bare');
+  writeln('                   --profile lists the accounts, --setup -p N creates one');
   writeln('      --setup      settings window: backend, address, secret, unit, limits');
   writeln('  -h, --help       show this help');
 end;
@@ -1969,6 +1996,9 @@ var
   setupMode: boolean = false;
   checkMode: boolean = false;
   agpMode: boolean = false;
+  profileMode: boolean = false;
+  profileName: string = '';
+  profileErr: string = '';
   statsHours: integer = STATS_DEFAULT_HOURS;
   sparkHours: integer = SPARK_DEFAULT_HOURS;
   agpDays: integer = AGP_DEFAULT_DAYS;
@@ -2037,6 +2067,20 @@ begin
           BadUsage(Format('--agp takes a number of days between %d and %d, got "%s".',
             [AGP_MIN_DAYS, AGP_MAX_DAYS, val]));
     end;
+    '-p', '--profile':
+    begin
+      profileMode := true;
+      // "--profile Anna", "--profile=Anna" or bare, which lists the
+      // accounts. A following option is never swallowed as a name —
+      // account names cannot start with '-'.
+      if (val = '') and (i < ParamCount) and
+        (Copy(ParamStr(i + 1), 1, 1) <> '-') then
+      begin
+        val := ParamStr(i + 1);
+        Inc(i);
+      end;
+      profileName := val;
+    end;
     '-c', '--check':
       checkMode := true;
     '--predict':
@@ -2064,6 +2108,20 @@ begin
     BadUsage('--setup cannot be combined with --graph, --stats, --spark or --agp.');
   if checkMode and (graphMode or statsMode or sparkMode or agpMode or setupMode) then
     BadUsage('--check cannot be combined with --graph, --stats, --spark, --agp or --setup.');
+  if profileMode and (profileName = '') and (graphMode or statsMode or
+    sparkMode or agpMode or setupMode or checkMode) then
+    BadUsage('A bare --profile lists the accounts; give it a name to ' +
+      'combine with other options.');
+
+  // Select the account before anything reads settings. Only --setup may name
+  // a new one — everything else needs stored settings to exist, so a typo
+  // fails with the list of accounts rather than an empty configuration.
+  if profileMode and (profileName <> '') then
+    if not ApplyProfile(profileName, setupMode, profileErr) then
+    begin
+      writeln(stderr, profileErr);
+      halt(64);
+    end;
 
 {$IFDEF WINDOWS}
   // The reading line and the stats bars are UTF-8; the console needs telling.
@@ -2072,6 +2130,13 @@ begin
   if not (graphMode or setupMode) then
     SetConsoleOutputCP(CP_UTF8);
 {$ENDIF}
+
+  // Listing accounts and editing settings need no backend at all.
+  if profileMode and (profileName = '') then
+  begin
+    RunProfileList;
+    halt(0);
+  end;
 
   // Settings are all --setup needs; connecting is somebody else's problem.
   if setupMode then

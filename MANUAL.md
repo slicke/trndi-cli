@@ -5,6 +5,7 @@ trndi-cli reads the settings the [Trndi](https://github.com/slicke/trndi) GUI sa
 ## Table of Contents
 - [What trndi-cli reads](#what-trndi-cli-reads)
 - [The settings window](#the-settings-window)
+- [More than one account](#more-than-one-account)
 - [Linux](#linux)
 - [Windows](#windows)
 - [Backends](#backends)
@@ -64,6 +65,31 @@ up from either side. Three things worth knowing:
 The window needs a terminal of at least 68x22, and a terminal at all: with
 input or output redirected, `--setup` refuses (exit 64) and an unconfigured run
 falls back to the message and exit 1.
+
+## More than one account
+
+The GUI's multi-user mode keeps several accounts in the same store: the
+account names live in the `users.names` key (comma-separated), and each
+account's settings are the same keys prefixed with the name and an
+underscore — `Anna_remote.type`, `Anna_unit`, and so on. The unprefixed keys
+are the *default* account, which always exists.
+
+`--profile` (or `-p`) selects the account a run reads and writes:
+
+```bash
+trndi-cli --profile            # list the accounts, one per line
+trndi-cli -p Anna              # Anna's current reading
+trndi-cli -p Anna --graph      # any mode combines; the frame names the account
+trndi-cli --setup -p Anna      # edit Anna's settings
+```
+
+Names are matched case-insensitively. With `--setup`, an unknown name creates
+the account when the window saves (cancelling creates nothing); names follow
+the GUI's rule — letters, digits and spaces. Everywhere else an unknown name
+is refused with the list of accounts (exit 64), so a typo cannot silently run
+against an empty configuration. Editing an account here and in the GUI is
+interchangeable, like everything else in the store; the CLI never touches
+which account the GUI opens on.
 
 ## Linux
 
@@ -155,7 +181,7 @@ trndi-cli exits with a distinct code and a message on stderr:
 | `4` | No recent reading | Backend reachable but silent > 24 h (with `--stats`: nothing in the requested window; with `--agp`: fewer than 3 days of history came back; with `--check`: also a stale fallback, so scripts never alarm on old data) — check the uploader |
 | `5` | Above the high threshold | Only from `--check` — an answer, not an error |
 | `6` | Below the low threshold | Only from `--check` — an answer, not an error |
-| `64` | Bad command line | Unknown option, a `--stats`, `--spark` or `--agp` window outside its range, or `--setup` without a terminal |
+| `64` | Bad command line | Unknown option, a `--stats`, `--spark` or `--agp` window outside its range, a `--profile` name not in the accounts, or `--setup` without a terminal |
 
 `--check` prints the same line as a plain run; the exit code uses the same
 thresholds the graph colors and `--stats` bands come from — the backend's own,

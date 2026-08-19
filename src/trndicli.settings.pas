@@ -45,6 +45,13 @@
   reads and writes that store, and puts a TUI window on top of it for machines
   where the GUI was never run.
 
+  The store can hold more than one account: the GUI's multi-user mode keeps
+  the account names in the root key users.names and prefixes every other key
+  with "Name_" (trndi.native.base's buildKey), the default account being the
+  unprefixed keys. @link(ApplyProfile) selects which account this run reads
+  and writes; everything below it is unaware — LoadSettings, StoreSettings
+  and the window just see the selected account's values.
+
   The window is used from two places: --setup, which opens it on its own
   (@link(RunSetup) brings up an FV application for the purpose), and F9 in
   graph mode, which opens it inside the already running one
@@ -80,6 +87,24 @@ type
 
 {** Where the settings live, for messages and the window's footer. }
 function SettingsLocation: string;
+
+{** Select the account whose settings this run reads and writes. Matching
+    against users.names is case-insensitive but the stored spelling builds
+    the keys, as in the GUI; '' and 'default' select the default account.
+    With @param(allowNew) an unknown name becomes a new account — validated
+    by the GUI's rules (letters, digits and spaces) and registered in
+    users.names only when the settings window saves, so a cancelled --setup
+    leaves no trace. False puts the reason in @param(err). }
+function ApplyProfile(const name: string; allowNew: boolean;
+  out err: string): boolean;
+
+{** The accounts in users.names, sorted case-insensitively as the GUI's
+    picker sorts them. Empty on a single-user machine; the default account
+    is not listed, since it always exists. }
+function ProfileNames: TStringArray;
+
+{** The account selected by @link(ApplyProfile), '' for the default one. }
+function ActiveProfileName: string;
 
 {** Read the shared settings; backend is '' on an unconfigured machine. }
 function LoadSettings: TCliSettings;
@@ -164,6 +189,20 @@ var
   // it is never put on the screen — a terminal is a poor place for a secret,
   // and a CareLink token blob would not fit an input line anyway.
   gStoredCreds: string = '';
+  // The account ApplyProfile selected: the configUser every native this unit
+  // creates gets, '' being the default account's unprefixed keys. gProfileNew
+  // marks a name not yet in users.names — StoreSettings registers it there
+  // the first time that account's settings are actually saved.
+  gProfile: string = '';
+  gProfileNew: boolean = false;
+
+// Every read and write goes through a native made here, so the selected
+// account's prefix is never forgotten at a call site.
+function MakeNative: TCliNative;
+begin
+  Result := TCliNative.Create;
+  Result.configUser := gProfile;
+end;
 
 function TCliNative.ResolveIniPath: string;
 begin
@@ -172,19 +211,23 @@ end;
 
 {$IFDEF WINDOWS}
 // The Windows GUI keeps settings in the registry, not an INI — read and write
-// the same values (HKCU\SOFTWARE\Trndi, value names like 'remote.type').
+// the same values (HKCU\SOFTWARE\Trndi, value names like 'remote.type', or
+// 'Name_remote.type' under a multi-user account: buildKey applies the same
+// prefix the GUI's own registry native applies).
 function TCliNative.GetSetting(const keyname: string; def: string;
 global: boolean): string;
 var
   reg: TRegistry;
+  key: string;
 begin
   Result := def;
+  key := buildKey(keyname, global);
   reg := TRegistry.Create;
   try
     reg.RootKey := HKEY_CURRENT_USER;
     if reg.OpenKeyReadOnly('\SOFTWARE\Trndi\') then
-      if reg.ValueExists(keyname) then
-        Result := reg.ReadString(keyname);
+      if reg.ValueExists(key) then
+        Result := reg.ReadString(key);
   finally
     reg.Free;
   end;
@@ -199,12 +242,101 @@ begin
   try
     reg.RootKey := HKEY_CURRENT_USER;
     if reg.OpenKey('\SOFTWARE\Trndi\', true) then
-      reg.WriteString(keyname, val);
+      reg.WriteString(buildKey(keyname, global), val);
   finally
     reg.Free;
   end;
 end;
 {$ENDIF}
+
+{------------------------------------------------------------------------------
+  Profiles (the GUI's multi-user accounts)
+ ------------------------------------------------------------------------------}
+
+function ActiveProfileName: string;
+begin
+  Result := gProfile;
+end;
+
+function ProfileNames: TStringArray;
+var
+  native: TCliNative;
+  sorter: Classes.TStringList;          // Objects has a TStringList of its own
+begin
+  Result := nil;
+  native := MakeNative;
+  try
+    if not native.TryGetCSVSetting('users.names', Result, true) then
+      exit;                             // TryGetCSVSetting left Result empty
+  finally
+    native.Free;
+  end;
+  // The GUI's picker sorts case-insensitively rather than in insertion
+  // order; list the same way so the two enumerate alike.
+  if Length(Result) > 1 then
+  begin
+    sorter := Classes.TStringList.Create;
+    try
+      sorter.CaseSensitive := false;
+      sorter.AddStrings(Result);
+      sorter.Sort;
+      Result := sorter.ToStringArray;
+    finally
+      sorter.Free;
+    end;
+  end;
+end;
+
+function ApplyProfile(const name: string; allowNew: boolean;
+out err: string): boolean;
+var
+  wanted, n, known: string;
+  names: TStringArray;
+  c: char;
+begin
+  Result := false;
+  err := '';
+  gProfile := '';
+  gProfileNew := false;
+  wanted := Trim(name);
+  // The default account is the unprefixed keys — the GUI's picker calls it
+  // "default", so accept that name for it here too.
+  if (wanted = '') or SameText(wanted, 'default') then
+    exit(true);
+
+  names := ProfileNames;
+  for n in names do
+    if SameText(n, wanted) then
+    begin
+      gProfile := n;                    // the stored spelling builds the keys
+      exit(true);
+    end;
+
+  if not allowNew then
+  begin
+    known := 'default';
+    for n in names do
+      known := known + ', ' + n;
+    err := Format('No account "%s" in the Trndi settings. Accounts here: %s. '
+      + 'A new one is created with --setup --profile %s, or in the GUI''s '
+      + 'multi-user settings.', [wanted, known, wanted]);
+    exit;
+  end;
+
+  // A new account. The same rule the GUI applies to a new name; matching is
+  // case-insensitive above, so a spelling variant of an existing account
+  // selects it rather than creating a near-duplicate.
+  for c in wanted do
+    if not (c in ['0'..'9', 'A'..'Z', 'a'..'z', ' ']) then
+    begin
+      err := Format('"%s" cannot name an account: letters, digits and ' +
+        'spaces only.', [wanted]);
+      exit;
+    end;
+  gProfile := wanted;
+  gProfileNew := true;
+  Result := true;
+end;
 
 {------------------------------------------------------------------------------
   Settings storage
@@ -223,7 +355,7 @@ function LoadSettings: TCliSettings;
 var
   native: TCliNative;
 begin
-  native := TCliNative.Create;
+  native := MakeNative;
   try
     Result.backend := Trim(native.GetSetting('remote.type'));
     Result.target := native.GetSetting('remote.target');
@@ -245,9 +377,22 @@ end;
 procedure StoreSettings(const s: TCliSettings; writeCreds: boolean);
 var
   native: TCliNative;
+  names: TStringArray;
 begin
-  native := TCliNative.Create;
+  native := MakeNative;
   try
+    // A new account exists once something is stored under it: register the
+    // name the first time its settings are saved, and not before, so backing
+    // out of the window creates nothing. Registration order is what the GUI
+    // uses too — it appends and sorts at display time.
+    if gProfileNew then
+    begin
+      native.TryGetCSVSetting('users.names', names, true);
+      SetLength(names, Length(names) + 1);
+      names[High(names)] := gProfile;
+      native.SetCSVSetting('users.names', names, true);
+      gProfileNew := false;
+    end;
     native.SetSetting('remote.type', s.backend);
     native.SetSetting('remote.target', s.target);
     if writeCreds then
@@ -566,7 +711,12 @@ var
 begin
   R.Assign(0, 0, DLG_W, DLG_H);
   R.Move((Desktop^.Size.X - DLG_W) div 2, (Desktop^.Size.Y - DLG_H) div 2);
-  inherited Init(R, 'Trndi settings');
+  // Name the account being edited, so two runs on the same machine are
+  // tellable apart. The default account keeps the plain title.
+  if ActiveProfileName <> '' then
+    inherited Init(R, 'Trndi settings - ' + ActiveProfileName)
+  else
+    inherited Init(R, 'Trndi settings');
 
   // Backend picker
   R.Assign(30, 2, 31, 10);
