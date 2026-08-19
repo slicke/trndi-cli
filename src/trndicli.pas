@@ -82,7 +82,7 @@ const
   cmAGP = 1003;                       // ... and for F7/AGP view toggle
   POLL_INTERVAL_MS = 5 * 60 * 1000;   // graph mode refetch cadence
   // Fetch more than any reasonable terminal is wide (one column per
-  // reading); Draw shows the newest readings that fit the window.
+  // reporting interval); Draw shows the newest slots that fit the window.
   GRAPH_SPAN_MIN = 480;               // minutes of history in the graph
   GRAPH_MAX_READINGS = 480;           // covers 8 h even for 1-min uploaders
   // Dexcom Share refuses anything above its own window instead of serving
@@ -151,6 +151,9 @@ var
   // window's left edge instead of walking onto readings that are not drawn.
   gSel: integer = -1;
   gFirstVis: integer = 0;
+  // The cadence the graph's time axis is drawn at, measured off the history
+  // by HistoryInterval on every fetch.
+  gInterval: integer = 5;
 
 type
   // One time-of-day slot of the AGP: how many readings landed there across
@@ -295,10 +298,14 @@ begin
   gHaveCurrent := false;
   gStale := false;
   try
-    gHaveCurrent := gApi.getCurrent(gCurrent);
+    // A backend that answers with a placeholder has not answered: `empty`
+    // is BG_NO_VAL, which reaches a display as -50.2 mmol/L. Treat it as no
+    // reading and fall through to the wider window, the way
+    // DropEmptyReadings drops the same placeholders out of the history.
+    gHaveCurrent := gApi.getCurrent(gCurrent) and (not gCurrent.empty);
     if not gHaveCurrent then
     begin
-      gHaveCurrent := gApi.getLast(gCurrent);
+      gHaveCurrent := gApi.getLast(gCurrent) and (not gCurrent.empty);
       gStale := gHaveCurrent;
     end;
   except
@@ -365,6 +372,25 @@ begin
   gPredictStable := gApi.stablePrediction;
 end;
 
+// A slot the backend could not fill carries BG_NO_VAL rather than a value:
+// Dexcom's placeholders, the debug backends' cleared readings. That is a gap,
+// not a measurement, and -904 mg/dL would wreck any scale or average it
+// reached. Drop them at the source so no caller has to know.
+procedure DropEmptyReadings(var res: BGResults);
+var
+  i, w: integer;
+begin
+  w := 0;
+  for i := 0 to High(res) do
+    if not res[i].empty then
+    begin
+      if w <> i then
+        res[w] := res[i];
+      Inc(w);
+    end;
+  SetLength(res, w);
+end;
+
 // getReadings, with the request clamped to Dexcom Share's hard caps on
 // failure: the Dexcom backends raise above (1440 min, 288 readings) rather
 // than serving what they can. Backends that serve weeks (Tandem, CareLink)
@@ -383,6 +409,7 @@ begin
   gFetchErr := '';
   try
     Result := gApi.getReadings(minutes, maxN);
+    DropEmptyReadings(Result);
     exit;
   except
     on E: Exception do
@@ -407,6 +434,7 @@ begin
 
   try
     Result := gApi.getReadings(clampedMin, clampedMax);
+    DropEmptyReadings(Result);
     gFetchErr := '';
   except
     on E: Exception do
@@ -415,6 +443,51 @@ begin
       Result := nil;
     end;
   end;
+end;
+
+// The cadence the history actually arrives at, in minutes: the tenth
+// percentile of the gaps between consecutive readings, which must be sorted
+// ascending. Measured rather than asked for, because getReportingInterval is
+// what the backend can carry rather than what the sensor does — xDrip reports
+// 1 while uploading every five minutes, and a 1-minute axis would leave four
+// blank columns between every pair of readings. A low percentile rather than
+// the minimum, so a pair of duplicate uploads cannot pass for the cadence,
+// and rather than the median, so a stretch of missing readings cannot double
+// it.
+function HistoryInterval(const res: BGResults): integer;
+var
+  gaps: array of integer;
+  i, j, n, g: integer;
+begin
+  Result := gApi.getReportingInterval;
+  if Result < 1 then
+    Result := 5;
+  SetLength(gaps, Length(res));
+  n := 0;
+  for i := 1 to High(res) do
+  begin
+    g := round((res[i].date - res[i - 1].date) * MinsPerDay);
+    if g > 0 then
+    begin
+      gaps[n] := g;
+      Inc(n);
+    end;
+  end;
+  if n < 4 then
+    exit;                             // too few to measure: take the claim
+  // Insertion sort: a few hundred entries, once per fetch.
+  for i := 1 to n - 1 do
+  begin
+    g := gaps[i];
+    j := i - 1;
+    while (j >= 0) and (gaps[j] > g) do
+    begin
+      gaps[j + 1] := gaps[j];
+      Dec(j);
+    end;
+    gaps[j + 1] := g;
+  end;
+  Result := gaps[(n - 1) div 10];
 end;
 
 // Graph mode data: history, the current reading and the forecast.
@@ -431,6 +504,7 @@ begin
   FetchCurrent;
   gReadings := FetchReadingsSafe(GRAPH_SPAN_MIN, GRAPH_MAX_READINGS);
   SortReadingsAscending(gReadings);
+  gInterval := HistoryInterval(gReadings);
   FetchPredictions;
   gLastFetch := GetTickCount64;
   if gFetchErr <> '' then
@@ -861,6 +935,10 @@ procedure TBGGraphView.Draw;
 var
   B: TDrawBuffer;
   y, x, i, gh, gw, first, pn, histW, horizon: integer;
+  interval, slots, selCol: integer;
+  newest: TDateTime;
+  // Column -> index into gReadings, -1 where no reading fell in that slot.
+  colIdx: array of integer;
   minV, maxV, pad, v, step, band, rowTop, tick: double;
   isTick: boolean;
   lbl: string;
@@ -950,19 +1028,49 @@ begin
     exit;
   end;
 
-  // Newest readings to the left of the divider; one column per reading.
-  first := Length(gReadings) - histW;
-  if first < 0 then
-    first := 0;
+  // Newest readings to the left of the divider. The axis is time, not
+  // reading order: one column per reporting interval, anchored on the newest
+  // reading, so a missed reading leaves its column empty instead of letting
+  // the next one slide in beside its neighbour. Without this a 10-minute hole
+  // reads as a 5-minute step and the line lies about how fast glucose moved.
+  interval := gInterval;
+  newest := gReadings[High(gReadings)].date;
+  // Never draw more slots than the fetched history spans: with fewer of them
+  // than the window is wide the plot stays packed against the "now" divider
+  // rather than trailing a run of blanks.
+  slots := round((newest - gReadings[0].date) * MinsPerDay / interval) + 1;
+  if slots < histW then
+    histW := slots;
+  SetLength(colIdx, histW);
+  for x := 0 to histW - 1 do
+    colIdx[x] := -1;
+  first := High(gReadings);
+  selCol := -1;
+  for i := 0 to High(gReadings) do
+  begin
+    // Rounded, so the jitter every backend has around its own cadence does
+    // not push a reading into the neighbouring slot.
+    x := histW - 1 - round((newest - gReadings[i].date) * MinsPerDay / interval);
+    if (x < 0) or (x > histW - 1) then
+      continue;                       // older than the window is wide
+    if i < first then
+      first := i;                     // readings ascend, so this is the oldest
+    colIdx[x] := i;                   // two in one slot: the newer wins
+    if i = gSel then
+      selCol := x;
+  end;
   gFirstVis := first;  // the cursor's left stop, see HandleEvent
 
   // Scale across everything drawn, forecast included so it cannot clip,
-  // padded so bars never touch the edges.
+  // padded so bars never touch the edges. Over the columns rather than an
+  // index range: only what got a slot is on screen.
   minV := gReadings[first].convert(gUnit);
   maxV := minV;
-  for i := first to High(gReadings) do
+  for x := 0 to histW - 1 do
   begin
-    v := gReadings[i].convert(gUnit);
+    if colIdx[x] < 0 then
+      continue;
+    v := gReadings[colIdx[x]].convert(gUnit);
     if v < minV then
       minV := v;
     if v > maxV then
@@ -1031,9 +1139,9 @@ begin
     // column trades its level color for white — the header carries the value.
     for x := 0 to histW - 1 do
     begin
-      i := first + x;
-      if i > High(gReadings) then
-        break;
+      i := colIdx[x];
+      if i < 0 then
+        continue;                     // no reading in this slot: leave the gap
       if i = gSel then
         attr := attrText
       else
@@ -1054,23 +1162,22 @@ begin
     WriteLine(0, y, Size.X, 1, B);
   end;
 
-  // Time legend: the reading time under every 15th column. Only under the
-  // history — the forecast's own times are implied by the horizon in the
-  // header, and a future clock time under a shaded bar invites reading it as
-  // an appointment.
+  // Time legend: the slot's own time under every 15th column — the column,
+  // not the reading in it, so the labels stay evenly spaced across a gap.
+  // Only under the history: the forecast's times are implied by the horizon
+  // in the header, and a future clock time under a shaded bar invites reading
+  // it as an appointment.
   MoveChar(B, ' ', attrLabel, Size.X);
   x := 0;
   while x + 5 <= histW do
   begin
-    i := first + x;
-    if i > High(gReadings) then
-      break;
-    MoveStr(B[MARGIN + x], FormatDateTime('hh:nn', gReadings[i].date), attrLabel);
+    MoveStr(B[MARGIN + x], FormatDateTime('hh:nn',
+      IncMinute(newest, -(histW - 1 - x) * interval)), attrLabel);
     Inc(x, 15);
   end;
   // Cursor marker under its column, on top of any time label there.
-  if (gSel >= first) and (gSel - first < histW) then
-    MoveChar(B[MARGIN + gSel - first], '^', attrText, 1);
+  if selCol >= 0 then
+    MoveChar(B[MARGIN + selCol], '^', attrText, 1);
   WriteLine(0, Size.Y - 1, Size.X, 1, B);
 end;
 
@@ -1286,9 +1393,9 @@ begin
     end
     else
     begin
-      // The reading cursor. One column per reading, so Left/Right step one
-      // reading at a time; the left stop is the oldest column on screen —
-      // older readings exist but have no column to put the cursor on.
+      // The reading cursor. Left/Right step one reading at a time, skipping
+      // over the empty slots between them; the left stop is the oldest
+      // reading on screen — older ones exist but have no column to sit on.
       if Length(gReadings) = 0 then
         exit;
       case Event.KeyCode of
