@@ -101,7 +101,7 @@ Every green build on `main` publishes binaries for Linux (x86-64, ARM64 and i686
 
 ## Configuration
 
-Configured Trndi GUI = done. Without the GUI, `--setup` opens a settings window in the same Free Vision style as the graph — backend, address, secret and unit, with a Test button that connects before you save. `F9` opens the same window from graph mode.
+Configured Trndi GUI = done. Without the GUI, `--setup` opens a settings window in the same Free Vision style as the graph — a `[1] Connection` page with the backend, address and secret, a `[2] Display` page with the unit and limits (`Alt-1` and `Alt-2` switch), and a Test button that connects before you save. `F9` opens the same window from graph mode.
 
 ```
 ╔═[■]═════════════════════ Trndi settings ═════════════════════════╗

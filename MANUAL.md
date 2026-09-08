@@ -38,8 +38,12 @@ them from trndi-cli itself is one command — see below.
 
 ## The settings window
 
-`trndi-cli --setup` opens a Free Vision window over the settings: a backend
-picker, the address and secret fields, the unit and the two hard limits.
+`trndi-cli --setup` opens a Free Vision window over the settings, on two pages:
+**[1] Connection**, with the backend picker and the address and secret fields,
+and **[2] Display**, with the unit and the two hard limits. The numbers are the
+keys: `Alt-1` and `Alt-2` switch between the pages, as do `Ctrl-PgUp` and
+`Ctrl-PgDn`. OK, Test and Cancel sit below both and apply to the pair, so a
+page never has to be visited to be saved.
 `F9` opens the same window
 from graph mode, where saving reconnects and refetches; a backend that fails to
 connect is reported and the running one kept. On a machine with nothing
@@ -56,6 +60,9 @@ up from either side. Three things worth knowing:
 - **The address means something different per backend**, which the line under
   the fields spells out for whichever one is selected. The same rules the GUI
   applies are checked when you save.
+- **A rejected field brings its page back up.** Saving checks both pages, so an
+  address or a limit can be wrong on the page you are not looking at; the
+  window switches to it and puts the cursor on the field before saying why.
 - **Test** connects with the values on screen without saving them. It costs one
   request, and the window sits still until the backend answers.
 - **The limit fields are typed in the display unit** but stored as the mg/dL

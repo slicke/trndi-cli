@@ -65,7 +65,7 @@ interface
 
 uses
 Classes, SysUtils,
-Objects, Drivers, Views, Dialogs, App, Menus, MsgBox, FVConsts, Video,
+Objects, Drivers, Views, Dialogs, App, Menus, MsgBox, FVConsts, Video, Tabs,
 trndi.native.console, trndi.api.registry;
 
 type
@@ -162,6 +162,10 @@ const
   cmTest = 1100;                        // "Test" button inside the dialog
   DLG_W = 68;                           // the window needs this much terminal
   DLG_H = 21;                           // ... and this many rows
+  TAB_W = 64;                           // the tab group inside it, inset by
+  TAB_H = 16;                           // one column and one row
+  PAGE_CONN = 0;                        // the tab pages, in the order they
+  PAGE_DISP = 1;                        // are built in TSetupDialog.Init
   FIELD_MAX = 255;                      // TInputLine data is a shortstring
 
 type
@@ -615,6 +619,7 @@ type
 
   PSetupDialog = ^TSetupDialog;
   TSetupDialog = object(TDialog)
+    pages: PTab;
     list: PBackendList;
     lineTarget: PInputLine;
     lineCreds: PSecretLine;
@@ -625,6 +630,7 @@ type
     procedure HandleEvent(var Event: TEvent); virtual;
     function CredsValue: string;
     procedure TestConnection;
+    function FailOn(page: integer; field: PView; const msg: string): boolean;
   end;
 
 procedure TDlgButton.Draw;
@@ -708,6 +714,8 @@ var
   hint: PStaticText;
   i, sel: integer;
   note, loc: string;
+  lblBackend, lblTarget, lblCreds, lblUnit, lblHi, lblLo: PLabel;
+  credNote, limitNote: PStaticText;
 begin
   R.Assign(0, 0, DLG_W, DLG_H);
   R.Move((Desktop^.Size.X - DLG_W) div 2, (Desktop^.Size.Y - DLG_H) div 2);
@@ -718,28 +726,34 @@ begin
   else
     inherited Init(R, 'Trndi settings');
 
-  // Backend picker
-  R.Assign(30, 2, 31, 10);
+  // The fields sit on the pages of a TTab rather than straight on the dialog.
+  // DLG_H already all but fills an 80x24 terminal, so the window cannot grow
+  // downwards and a page is the only place a further setting can go.
+  //
+  // Two rules come with that. The views below are handed to tab items and
+  // must NOT be inserted here as well: TTab inserts the selected page's views
+  // itself, and its destructor frees every view on every page. And their
+  // coordinates are relative to the tab, whose header takes rows 0-2 and
+  // whose frame takes the last row and both edge columns, leaving x 1..62
+  // and y 3..14 to put things in.
+
+  // --- Connection: the values this program shares with the Trndi GUI --------
+  R.Assign(28, 4, 29, 12);
   sb := New(PScrollBar, Init(R));
-  Insert(sb);
-  R.Assign(3, 2, 30, 10);
+  R.Assign(2, 4, 28, 12);
   list := New(PBackendList, Init(R, 1, sb));
-  Insert(list);
-  R.Assign(3, 1, 20, 2);
-  Insert(New(PLabel, Init(R, '~B~ackend', list)));
+  R.Assign(2, 3, 20, 4);
+  lblBackend := New(PLabel, Init(R, '~B~ackend', list));
 
-  // Address and secret
-  R.Assign(34, 2, 65, 3);
+  R.Assign(32, 4, 61, 5);
   lineTarget := New(PInputLine, Init(R, FIELD_MAX));
-  Insert(lineTarget);
-  R.Assign(34, 1, 65, 2);
-  Insert(New(PLabel, Init(R, '~A~ddress / account', lineTarget)));
+  R.Assign(32, 3, 61, 4);
+  lblTarget := New(PLabel, Init(R, '~A~ddress / account', lineTarget));
 
-  R.Assign(34, 5, 65, 6);
+  R.Assign(32, 7, 61, 8);
   lineCreds := New(PSecretLine, Init(R, FIELD_MAX));
-  Insert(lineCreds);
-  R.Assign(34, 4, 65, 5);
-  Insert(New(PLabel, Init(R, '~S~ecret / password', lineCreds)));
+  R.Assign(32, 6, 61, 7);
+  lblCreds := New(PLabel, Init(R, '~S~ecret / password', lineCreds));
   // Directly under the field, because an empty field that nevertheless
   // connects is otherwise a puzzle: the stored secret is never loaded into
   // it, and leaving it alone is how you keep that secret.
@@ -747,50 +761,76 @@ begin
     note := 'Stored - type to replace'
   else
     note := 'No secret stored';
-  R.Assign(35, 6, 65, 7);
-  Insert(New(PStaticText, Init(R, note)));
+  R.Assign(33, 8, 61, 9);
+  credNote := New(PStaticText, Init(R, note));
 
-  // Unit
-  R.Assign(34, 8, 65, 10);
+  // Hint line: what the two fields mean for the selected backend
+  R.Assign(3, 12, 61, 14);
+  hint := New(PStaticText, Init(R, ''));
+
+  // --- Display: the unit, and the limits read in it -------------------------
+  R.Assign(2, 4, 30, 6);
   unitBox := New(PRadioButtons, Init(R,
     NewSItem('~m~mol/L', NewSItem('m~g~/dL', nil))));
-  Insert(unitBox);
-  R.Assign(34, 7, 65, 8);
-  Insert(New(PLabel, Init(R, '~U~nit', unitBox)));
+  R.Assign(2, 3, 20, 4);
+  lblUnit := New(PLabel, Init(R, '~U~nit', unitBox));
 
   // Threshold overrides, in the display unit. These write the override.hi/lo
   // keys the GUI applies too, so the two apps color by the same limits; blank
   // leaves the backend's own thresholds in charge.
-  R.Assign(34, 11, 49, 12);
+  R.Assign(2, 8, 17, 9);
   lineHi := New(PInputLine, Init(R, 8));
-  Insert(lineHi);
-  R.Assign(34, 10, 49, 11);
-  Insert(New(PLabel, Init(R, '~H~igh limit', lineHi)));
+  R.Assign(2, 7, 17, 8);
+  lblHi := New(PLabel, Init(R, '~H~igh limit', lineHi));
 
-  R.Assign(50, 11, 65, 12);
+  R.Assign(19, 8, 34, 9);
   lineLo := New(PInputLine, Init(R, 8));
-  Insert(lineLo);
-  R.Assign(50, 10, 65, 11);
-  Insert(New(PLabel, Init(R, 'Lo~w~ limit', lineLo)));
+  R.Assign(19, 7, 34, 8);
+  lblLo := New(PLabel, Init(R, 'Lo~w~ limit', lineLo));
 
-  R.Assign(35, 12, 65, 13);
-  Insert(New(PStaticText, Init(R, 'Blank = the backend''s limits')));
+  R.Assign(3, 10, 46, 11);
+  limitNote := New(PStaticText, Init(R, 'Blank = the backend''s limits'));
 
-  // Hint line: what the two fields mean for the selected backend
-  R.Assign(3, 14, 65, 16);
-  hint := New(PStaticText, Init(R, ''));
-  Insert(hint);
+  // The item chains are read head to tail and inserted in that order, so they
+  // list the views the way they would have been inserted by hand. The pages
+  // are numbered rather than lettered: TTab claims a page's Alt key before
+  // the event ever reaches a field, and a digit cannot collide with the ~x~
+  // of a label or a button the way a letter has to be checked against
+  // B, A, S, U, H, W, M, G, O, T and C. The number is in the page's name so
+  // the key is on screen instead of hiding in the highlight colour.
+  R.Assign(2, 1, 2 + TAB_W, 1 + TAB_H);
+  pages := New(PTab, Init(R,
+    NewTabDef('[~1~] Connection', list,
+      NewTabItem(sb,
+      NewTabItem(list,
+      NewTabItem(lblBackend,
+      NewTabItem(lineTarget,
+      NewTabItem(lblTarget,
+      NewTabItem(lineCreds,
+      NewTabItem(lblCreds,
+      NewTabItem(credNote,
+      NewTabItem(hint, nil))))))))),
+    NewTabDef('[~2~] Display', unitBox,
+      NewTabItem(unitBox,
+      NewTabItem(lblUnit,
+      NewTabItem(lineHi,
+      NewTabItem(lblHi,
+      NewTabItem(lineLo,
+      NewTabItem(lblLo,
+      NewTabItem(limitNote, nil))))))),
+    nil))));
+  Insert(pages);
 
   // A long path is one unbreakable word to TStaticText, which would drop it
   // rather than wrap it — keep the tail, which is the telling part.
   loc := SettingsLocation;
   if Length(loc) > 52 then
     loc := '...' + Copy(loc, Length(loc) - 48, MaxInt);
-  R.Assign(3, 16, 65, 17);
+  R.Assign(3, 17, 65, 18);
   Insert(New(PStaticText, Init(R, 'Saved in ' + loc)));
 
   // Buttons: Test connects with the values on screen without saving them.
-  // Equal widths, right edge lined up with the fields above.
+  // Equal widths, right edge lined up with the tab above.
   R.Assign(30, 18, 41, 19);
   Insert(New(PDlgButton, Init(R, '~O~K', cmOK, bfDefault)));
   R.Assign(42, 18, 53, 19);
@@ -827,7 +867,11 @@ begin
     unitBox^.Value := 1;
   unitBox^.Sel := unitBox^.Value;
 
+  // SelectNext lands on the tab; TTab.SetState would then pick the page's
+  // *last* selectable view, opening the window on the address field rather
+  // than the backend list. Say where the cursor belongs.
   SelectNext(false);
+  list^.Select;
 end;
 
 function TSetupDialog.CredsValue: string;
@@ -837,6 +881,24 @@ begin
   Result := Trim(lineCreds^.Data^);
   if Result = '' then
     Result := gStoredCreds;
+end;
+
+// Report a field the dialog cannot accept. The field may well be on the page
+// that is not showing, so bring that page up and put the cursor on it before
+// saying what is wrong — an error about a limit is no help while the window
+// shows the backend list. Always false, so Valid can return it directly.
+function TSetupDialog.FailOn(page: integer; field: PView;
+  const msg: string): boolean;
+begin
+  if pages <> nil then
+  begin
+    pages^.SelectTab(page);
+    pages^.Select;
+    if field <> nil then
+      field^.Select;
+  end;
+  ShowError(msg);
+  Result := false;
 end;
 
 function TSetupDialog.Valid(Command: word): boolean;
@@ -851,18 +913,13 @@ begin
 
   addr := Trim(lineTarget^.Data^);
   if addr = '' then
-  begin
-    ShowError('The address field is empty. ' + BackendHint(list^.SelectedCode));
-    exit(false);
-  end;
+    exit(FailOn(PAGE_CONN, lineTarget, 'The address field is empty. ' +
+      BackendHint(list^.SelectedCode)));
 
   msg := CredMessage(CheckBackendCredentials(list^.SelectedCode, addr,
     CredsValue));
   if msg <> '' then
-  begin
-    ShowError(msg);
-    exit(false);
-  end;
+    exit(FailOn(PAGE_CONN, lineCreds, msg));
 
   // The limits are read in whatever unit is selected right now, so a value
   // typed before switching the radio button means what the radio says on OK.
@@ -871,27 +928,23 @@ begin
     u := BG_UNIT_NAMES[mmol]
   else
     u := BG_UNIT_NAMES[mgdl];
-  if (not ParseLimit(lineHi^.Data^, asMmol, hiV)) or
-    (not ParseLimit(lineLo^.Data^, asMmol, loV)) then
-  begin
-    ShowError('The limits must be numbers in ' + u + ', or blank for the ' +
-      'backend''s own.');
-    exit(false);
-  end;
+  if not ParseLimit(lineHi^.Data^, asMmol, hiV) then
+    exit(FailOn(PAGE_DISP, lineHi, 'The limits must be numbers in ' + u +
+      ', or blank for the backend''s own.'));
+  if not ParseLimit(lineLo^.Data^, asMmol, loV) then
+    exit(FailOn(PAGE_DISP, lineLo, 'The limits must be numbers in ' + u +
+      ', or blank for the backend''s own.'));
   // 36-450 mg/dL is 2.0-25.0 mmol/L: past anything a CGM reports, the value
   // is far more likely a unit mix-up than a choice.
-  if ((hiV > 0) and ((hiV < 36) or (hiV > 450))) or
-    ((loV > 0) and ((loV < 36) or (loV > 450))) then
-  begin
-    ShowError(Format('Limits must be between %s and %s %s.',
-      [FormatLimit(36, asMmol), FormatLimit(450, asMmol), u]));
-    exit(false);
-  end;
+  msg := Format('Limits must be between %s and %s %s.',
+    [FormatLimit(36, asMmol), FormatLimit(450, asMmol), u]);
+  if (hiV > 0) and ((hiV < 36) or (hiV > 450)) then
+    exit(FailOn(PAGE_DISP, lineHi, msg));
+  if (loV > 0) and ((loV < 36) or (loV > 450)) then
+    exit(FailOn(PAGE_DISP, lineLo, msg));
   if (hiV > 0) and (loV > 0) and (loV >= hiV) then
-  begin
-    ShowError('The low limit must be below the high limit.');
-    exit(false);
-  end;
+    exit(FailOn(PAGE_DISP, lineLo,
+      'The low limit must be below the high limit.'));
 end;
 
 // Connect with what is on screen, without saving it. The backend call is
@@ -1001,9 +1054,10 @@ begin
   StatusLine := New(PStatusLine, Init(R,
     NewStatusDef(0, $FFFF,
       NewStatusKey('~Tab~ Next field', kbNoKey, 0,
+      NewStatusKey('~Alt+1/2~ Page', kbNoKey, 0,
       NewStatusKey('~Enter~ Save', kbNoKey, 0,
       NewStatusKey('~Esc~ Cancel', kbNoKey, 0,
-      nil))),
+      nil)))),
     nil)));
 end;
 
