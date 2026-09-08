@@ -18,4 +18,5 @@ _arguments -s \
   '--predict[graph mode: start with the forecast drawn (F6 toggles)]' \
   {-p,--profile}'[use this multi-user account (bare: list accounts)]::account:{compadd ${(f)"$(trndi-cli --profile 2>/dev/null)"}}' \
   "($modes)--setup[settings window: backend, address, secret, unit, limits]" \
-  '(- *)'{-h,--help}'[show help]'
+  '(- *)'{-h,--help}'[show help]' \
+  '(- *)'{-v,--version}'[show the version, the vendored Trndi and the build]'

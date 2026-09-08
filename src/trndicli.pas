@@ -2053,6 +2053,27 @@ begin
     writeln(n);
 end;
 
+// Build identity. The Makefile (and make.ps1) write build/cliversion.inc
+// before each compile with the two constants below; it is generated rather
+// than committed, so a plain "fpc src/trndicli.pas" outside the build system
+// will not find it. See the $(VERSION_INC) rule.
+const
+{$I cliversion.inc}
+
+// What the binary is and where it came from. A bug report needs the source
+// revision above all, so the describe strings lead: the CLI's own, then the
+// vendored Trndi the API layer was taken from. The compile stamp only
+// distinguishes two builds of the same revision, so it comes last.
+procedure ShowVersion;
+begin
+  writeln('trndi-cli ', CLI_VERSION);
+  writeln('Trndi core ', CLI_TRNDI);
+  // %DATE% is YYYY/MM/DD; ISO separators read better next to the time.
+  writeln('FPC ', {$I %FPCVERSION%}, ' for ',
+    {$I %FPCTARGETOS%}, '/', {$I %FPCTARGETCPU%}, ', built ',
+    StringReplace({$I %DATE%}, '/', '-', [rfReplaceAll]), ' ', {$I %TIME%});
+end;
+
 // A new option added here also goes in the three files under completions/.
 procedure Usage;
 begin
@@ -2074,6 +2095,7 @@ begin
   writeln('                   --profile lists the accounts, --setup -p N creates one');
   writeln('      --setup      settings window: backend, address, secret, unit, limits');
   writeln('  -h, --help       show this help');
+  writeln('  -v, --version    show the version, the vendored Trndi and the build');
 end;
 
 function IsNumeric(const s: string): boolean;
@@ -2201,6 +2223,11 @@ begin
     '-h', '--help':
     begin
       Usage;
+      halt(0);
+    end;
+    '-v', '--version':
+    begin
+      ShowVersion;
       halt(0);
     end;
     else

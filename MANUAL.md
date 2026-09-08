@@ -189,6 +189,19 @@ as adjusted by any overrides. A
 personal target range narrower than the hard limits does not trip it — like the
 graph, only red and blue count.
 
+**Reporting a bug** — `trndi-cli --version` prints what a report needs: the
+CLI's own revision, the Trndi build its API layer was vendored from, and the
+compiler and target the binary was made with. A release build names its tag; a
+build from a working tree names the nearest tag, the commits since it and the
+short SHA, with `-dirty` when the tree had uncommitted changes.
+
+```
+$ trndi-cli --version
+trndi-cli build-106
+Trndi core build-247
+FPC 3.2.2 for Linux/x86_64, built 2026-09-08 18:28:33
+```
+
 **Windows: "libcurl.dll was not found"** — this pops up before trndi-cli even runs; see the note under [Windows](#windows).
 
 A reading older than ~10 minutes is still printed, marked `[stale, N min old]`.

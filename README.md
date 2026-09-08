@@ -61,6 +61,7 @@ trndi-cli --profile     list the accounts of Trndi's multi-user mode
 trndi-cli -p Anna ...   any mode above against that account's settings
 trndi-cli --setup       settings window: backend, address, secret, unit, limits
 trndi-cli --help        options
+trndi-cli --version     version, the vendored Trndi build and the compiler
 ```
 
 Exit codes: `0` OK · `1` not configured · `2` unknown backend · `3` connection failed · `4` no recent reading. `--check` adds `5` above the high threshold and `6` below the low one — the same thresholds the graph colors use — so a cron job can alarm without parsing the output:

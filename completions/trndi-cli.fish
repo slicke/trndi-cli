@@ -16,3 +16,4 @@ complete -c trndi-cli -l predict -d 'Graph mode: start with the forecast drawn (
 complete -c trndi-cli -s p -l profile -d 'Use this multi-user account (bare: list accounts)' -a '(trndi-cli --profile 2>/dev/null)'
 complete -c trndi-cli -l setup -d 'Settings window: backend, address, secret, unit, limits'
 complete -c trndi-cli -s h -l help -d 'Show help'
+complete -c trndi-cli -s v -l version -d 'Show the version, the vendored Trndi and the build'
