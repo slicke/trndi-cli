@@ -78,8 +78,9 @@ type
     // User thresholds in mg/dL, 0 when not set. wizHi/wizLo back-fill
     // backends that report no limits of their own; the ovr* values apply on
     // top of whatever the backend reports, in the same way the GUI applies
-    // them (umain_init.inc). The range pair is honoured but has no field in
-    // the settings window.
+    // them (umain_init.inc). ovrHi/ovrLo are the hard limits the graph colors
+    // by; ovrRange* is the narrower band inside them that --stats breaks out
+    // and the graph draws as gridlines.
     wizHi, wizLo: integer;
     ovrHi, ovrLo: integer;
     ovrRangeHi, ovrRangeLo: integer;
@@ -407,8 +408,8 @@ begin
       native.SetSetting('unit', 'mgdl');
     // A cleared limit is written as an empty value: that reads back as "not
     // set" here, and the GUI's GetIntSetting falls back to its default on it
-    // too. Only the pair the settings window edits is written; the wizard and
-    // range keys stay whatever the GUI made them.
+    // too. The wizard keys stay whatever the GUI made them — they are its
+    // setup flow's answer, not a limit anyone typed here.
     if s.ovrHi > 0 then
       native.SetSetting('override.hi', IntToStr(s.ovrHi))
     else
@@ -417,6 +418,14 @@ begin
       native.SetSetting('override.lo', IntToStr(s.ovrLo))
     else
       native.SetSetting('override.lo', '');
+    if s.ovrRangeHi > 0 then
+      native.SetSetting('override.rangehi', IntToStr(s.ovrRangeHi))
+    else
+      native.SetSetting('override.rangehi', '');
+    if s.ovrRangeLo > 0 then
+      native.SetSetting('override.rangelo', IntToStr(s.ovrRangeLo))
+    else
+      native.SetSetting('override.rangelo', '');
   finally
     native.Free;
   end;
@@ -625,6 +634,7 @@ type
     lineCreds: PSecretLine;
     unitBox: PRadioButtons;
     lineHi, lineLo: PInputLine;
+    lineRangeHi, lineRangeLo: PInputLine;
     constructor Init(const cur: TCliSettings);
     function Valid(Command: word): boolean; virtual;
     procedure HandleEvent(var Event: TEvent); virtual;
@@ -715,7 +725,8 @@ var
   i, sel: integer;
   note, loc: string;
   lblBackend, lblTarget, lblCreds, lblUnit, lblHi, lblLo: PLabel;
-  credNote, limitNote: PStaticText;
+  lblRangeHi, lblRangeLo: PLabel;
+  credNote, limitNote, rangeNote: PStaticText;
 begin
   R.Assign(0, 0, DLG_W, DLG_H);
   R.Move((Desktop^.Size.X - DLG_W) div 2, (Desktop^.Size.Y - DLG_H) div 2);
@@ -788,16 +799,33 @@ begin
   R.Assign(19, 7, 34, 8);
   lblLo := New(PLabel, Init(R, 'Lo~w~ limit', lineLo));
 
-  R.Assign(3, 10, 46, 11);
+  R.Assign(3, 9, 46, 10);
   limitNote := New(PStaticText, Init(R, 'Blank = the backend''s limits'));
+
+  // The personal in-range band, inside the hard limits: override.rangehi and
+  // override.rangelo, the same keys the GUI writes. --stats breaks its five
+  // bands out along these, and the graph draws them as gridlines.
+  R.Assign(2, 12, 17, 13);
+  lineRangeHi := New(PInputLine, Init(R, 8));
+  R.Assign(2, 11, 17, 12);
+  lblRangeHi := New(PLabel, Init(R, '~R~ange high', lineRangeHi));
+
+  R.Assign(19, 12, 34, 13);
+  lineRangeLo := New(PInputLine, Init(R, 8));
+  R.Assign(19, 11, 34, 12);
+  lblRangeLo := New(PLabel, Init(R, 'Ra~n~ge low', lineRangeLo));
+
+  R.Assign(3, 13, 50, 14);
+  rangeNote := New(PStaticText,
+    Init(R, 'The in-range band, inside the limits'));
 
   // The item chains are read head to tail and inserted in that order, so they
   // list the views the way they would have been inserted by hand. The pages
   // are numbered rather than lettered: TTab claims a page's Alt key before
   // the event ever reaches a field, and a digit cannot collide with the ~x~
   // of a label or a button the way a letter has to be checked against
-  // B, A, S, U, H, W, M, G, O, T and C. The number is in the page's name so
-  // the key is on screen instead of hiding in the highlight colour.
+  // B, A, S, U, H, W, M, G, R, N, O, T and C. The number is in the page's
+  // name so the key is on screen instead of hiding in the highlight colour.
   R.Assign(2, 1, 2 + TAB_W, 1 + TAB_H);
   pages := New(PTab, Init(R,
     NewTabDef('[~1~] Connection', list,
@@ -817,7 +845,12 @@ begin
       NewTabItem(lblHi,
       NewTabItem(lineLo,
       NewTabItem(lblLo,
-      NewTabItem(limitNote, nil))))))),
+      NewTabItem(limitNote,
+      NewTabItem(lineRangeHi,
+      NewTabItem(lblRangeHi,
+      NewTabItem(lineRangeLo,
+      NewTabItem(lblRangeLo,
+      NewTabItem(rangeNote, nil)))))))))))),
     nil))));
   Insert(pages);
 
@@ -861,6 +894,8 @@ begin
   SetLineText(lineTarget, cur.target);
   SetLineText(lineHi, FormatLimit(cur.ovrHi, cur.mmol));
   SetLineText(lineLo, FormatLimit(cur.ovrLo, cur.mmol));
+  SetLineText(lineRangeHi, FormatLimit(cur.ovrRangeHi, cur.mmol));
+  SetLineText(lineRangeLo, FormatLimit(cur.ovrRangeLo, cur.mmol));
   if cur.mmol then
     unitBox^.Value := 0
   else
@@ -905,7 +940,7 @@ function TSetupDialog.Valid(Command: word): boolean;
 var
   addr, msg, u: string;
   asMmol: boolean;
-  hiV, loV: integer;
+  hiV, loV, rHiV, rLoV: integer;
 begin
   Result := inherited Valid(Command);
   if (not Result) or (Command <> cmOK) then
@@ -934,6 +969,12 @@ begin
   if not ParseLimit(lineLo^.Data^, asMmol, loV) then
     exit(FailOn(PAGE_DISP, lineLo, 'The limits must be numbers in ' + u +
       ', or blank for the backend''s own.'));
+  if not ParseLimit(lineRangeHi^.Data^, asMmol, rHiV) then
+    exit(FailOn(PAGE_DISP, lineRangeHi, 'The range must be numbers in ' + u +
+      ', or blank for the backend''s own.'));
+  if not ParseLimit(lineRangeLo^.Data^, asMmol, rLoV) then
+    exit(FailOn(PAGE_DISP, lineRangeLo, 'The range must be numbers in ' + u +
+      ', or blank for the backend''s own.'));
   // 36-450 mg/dL is 2.0-25.0 mmol/L: past anything a CGM reports, the value
   // is far more likely a unit mix-up than a choice.
   msg := Format('Limits must be between %s and %s %s.',
@@ -942,9 +983,27 @@ begin
     exit(FailOn(PAGE_DISP, lineHi, msg));
   if (loV > 0) and ((loV < 36) or (loV > 450)) then
     exit(FailOn(PAGE_DISP, lineLo, msg));
+  if (rHiV > 0) and ((rHiV < 36) or (rHiV > 450)) then
+    exit(FailOn(PAGE_DISP, lineRangeHi, msg));
+  if (rLoV > 0) and ((rLoV < 36) or (rLoV > 450)) then
+    exit(FailOn(PAGE_DISP, lineRangeLo, msg));
   if (hiV > 0) and (loV > 0) and (loV >= hiV) then
     exit(FailOn(PAGE_DISP, lineLo,
       'The low limit must be below the high limit.'));
+  // The range nests inside the limits: a bound that meets or passes one of
+  // them leaves its --stats band empty and its gridline on top of the color
+  // boundary it was supposed to sit inside. Only the pairs both on screen can
+  // be checked — a blank limit means the backend's own, which this window
+  // does not know.
+  if (rHiV > 0) and (rLoV > 0) and (rLoV >= rHiV) then
+    exit(FailOn(PAGE_DISP, lineRangeLo,
+      'The low end of the range must be below the high end.'));
+  if (hiV > 0) and (rHiV > 0) and (rHiV >= hiV) then
+    exit(FailOn(PAGE_DISP, lineRangeHi,
+      'The range must stay below the high limit.'));
+  if (loV > 0) and (rLoV > 0) and (rLoV <= loV) then
+    exit(FailOn(PAGE_DISP, lineRangeLo,
+      'The range must stay above the low limit.'));
 end;
 
 // Connect with what is on screen, without saving it. The backend call is
@@ -1021,6 +1080,8 @@ begin
       // Already validated by Valid; blank parses to 0, which clears the key.
       ParseLimit(dlg^.lineHi^.Data^, next.mmol, next.ovrHi);
       ParseLimit(dlg^.lineLo^.Data^, next.mmol, next.ovrLo);
+      ParseLimit(dlg^.lineRangeHi^.Data^, next.mmol, next.ovrRangeHi);
+      ParseLimit(dlg^.lineRangeLo^.Data^, next.mmol, next.ovrRangeLo);
       StoreSettings(next, next.creds <> '');
       Result := true;
     end;

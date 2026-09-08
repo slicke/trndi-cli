@@ -730,18 +730,30 @@ type
 var
   GraphWin: PBGWindow = nil;
 
-// Fixed three-color scheme on a black canvas: red high, green in range,
-// blue low. The terminal driver only emits the 8 base colors (no intensity),
-// so anything subtler lands wherever the terminal theme happens to put it.
+// A cold-to-warm ramp on a black canvas: blue below the low limit, cyan under
+// the personal range, green inside it, yellow over the range, red above the
+// high limit. The terminal driver only emits the 8 base colors (no intensity),
+// so anything subtler lands wherever the terminal theme happens to put it —
+// these five are far enough apart to survive that.
+//
+// The two middle colors only ever appear where a personal range is set: with
+// none, getLevel never returns the sublevels and this is the red/green/blue it
+// always was. The GUI separates the same five (trndi.theme.pp's ColorRangeHigh
+// and ColorRangeLow), for the same reason — "above target" and "above the hard
+// limit" are not the same news.
 function LevelAttr(lvl: BGValLevel): byte;
 begin
   case lvl of
   BGHigh:
     Result := $04;  // red on black
+  BGRangeHI:
+    Result := $06;  // yellow on black: over the range, under the limit
   BGLOW:
     Result := $01;  // blue on black
+  BGRangeLO:
+    Result := $03;  // cyan on black: under the range, over the limit
   else
-    Result := $02;  // green on black (incl. the personal-limit sublevels)
+    Result := $02;  // green on black
   end;
 end;
 
@@ -770,6 +782,32 @@ begin
   lo := Val(gApi.cgmLo);
 end;
 
+// The personal in-range band in display units, 0 for a bound that is not set.
+// Distinct from the hard limits: these do not change a bar's color (LevelAttr
+// paints both sublevels green, and --check counts only red and blue), so
+// without a line drawn for them they are invisible outside --stats.
+procedure RangeBounds(out hiV, loV: double);
+
+  function Disp(mgdlVal: integer): double;
+  begin
+    if gUnit = mmol then
+      Result := mgdlVal * TrndiAPI.toMMOL
+    else
+      Result := mgdlVal;
+  end;
+
+begin
+  hiV := 0;
+  loV := 0;
+  if gApi = nil then
+    exit;
+  // The sentinels are the API's "no personal bound", and differ per end.
+  if gApi.cgmRangeHi <> TrndiAPI.CGM_RANGE_HI_DISABLED then
+    hiV := Disp(gApi.cgmRangeHi);
+  if gApi.cgmRangeLo <> TrndiAPI.CGM_RANGE_LO_DISABLED then
+    loV := Disp(gApi.cgmRangeLo);
+end;
+
 // The AGP view: every fetched day folded onto one 24-hour axis. Per
 // time-of-day column the median is drawn solid, the 25-75% band in medium
 // shade and the 5-95% band in light shade — the forecast's "shade means
@@ -782,6 +820,7 @@ var
   B: TDrawBuffer;
   y, x, bk, gh, plotW, h: integer;
   minV, maxV, pad, v, step, band, rowTop, rowBot, tick, midMgdl: double;
+  rangeHiV, rangeLoV: double;
   isTick, any: boolean;
   lbl: string;
   attr: byte;
@@ -793,6 +832,25 @@ var
       Result := mgdlVal * TrndiAPI.toMMOL
     else
       Result := mgdlVal;
+  end;
+
+  // A gridline where a personal range bound falls in the current row's band,
+  // as the bar graph draws it. Where a band crosses one of these is the
+  // pattern this view exists to show, so the line earns its place here.
+  procedure RangeLine(value: double);
+  var
+    col: integer;
+  begin
+    if (value <= 0) or (value > rowTop) or (value <= rowBot) then
+      exit;
+    if not isTick then
+      if gUnit = mmol then
+        MoveStr(B, Format('%6.1f', [value]), LevelAttr(BGRange))
+      else
+        MoveStr(B, Format('%6.0f', [value]), LevelAttr(BGRange));
+    MoveChar(B[MARGIN - 1], '+', LevelAttr(BGRange), 1);
+    for col := 0 to plotW - 1 do
+      MoveChar(B[MARGIN + col], #250, LevelAttr(BGRange), 1);
   end;
 
 begin
@@ -875,6 +933,7 @@ begin
   minV := minV - pad;
   maxV := maxV + pad;
   band := (maxV - minV) / gh;
+  RangeBounds(rangeHiV, rangeLoV);
 
   for y := 1 to Size.Y - 2 do
   begin
@@ -913,6 +972,10 @@ begin
       for x := 0 to plotW - 1 do
         MoveChar(B[MARGIN + x], #250, attrLabel, 1);
     end;
+
+    // ... and where the personal range ends, over the legend's own line.
+    RangeLine(rangeHiV);
+    RangeLine(rangeLoV);
 
     // Bands: whole-cell resolution — these are vertical ranges, not bar
     // tops, so the half-block trick does not apply. The cursor's bucket
@@ -979,9 +1042,30 @@ var
   // Column -> index into gReadings, -1 where no reading fell in that slot.
   colIdx: array of integer;
   minV, maxV, pad, v, step, band, rowTop, tick: double;
+  rangeHiV, rangeLoV: double;
   isTick: boolean;
   lbl: string;
   attr: byte;
+
+  // A gridline where a personal range bound falls in the current row's band.
+  // Drawn before the bars, like the legend's own, so a bar always wins the
+  // cell; in the in-range color, since the pair is what "in range" means.
+  procedure RangeLine(value: double);
+  var
+    col: integer;
+  begin
+    if (value <= 0) or (value > rowTop) or (value <= rowTop - band) then
+      exit;
+    // A legend row already has a number in the margin; leave it its own.
+    if not isTick then
+      if gUnit = mmol then
+        MoveStr(B, Format('%6.1f', [value]), LevelAttr(BGRange))
+      else
+        MoveStr(B, Format('%6.0f', [value]), LevelAttr(BGRange));
+    MoveChar(B[MARGIN - 1], '+', LevelAttr(BGRange), 1);
+    for col := 0 to gw - 1 do
+      MoveChar(B[MARGIN + col], #250, LevelAttr(BGRange), 1);
+  end;
 
   // Map a value onto the current row's half-steps and emit the right glyph.
   procedure PlotCell(col: integer; value: double; attr: byte; full, half: char);
@@ -1136,6 +1220,7 @@ begin
   minV := minV - pad;
   maxV := maxV + pad;
   band := (maxV - minV) / gh;
+  RangeBounds(rangeHiV, rangeLoV);
 
   for y := 1 to Size.Y - 2 do
   begin
@@ -1173,6 +1258,11 @@ begin
       for x := 0 to gw - 1 do
         MoveChar(B[MARGIN + x], #250, attrLabel, 1);
     end;
+
+    // ... and where the personal range ends, over the legend's own line: the
+    // band the bars are meant to stay inside is the more specific fact.
+    RangeLine(rangeHiV);
+    RangeLine(rangeLoV);
 
     // Bars: value mapped to half-block steps from the bottom. The cursor's
     // column trades its level color for white — the header carries the value.
@@ -1780,8 +1870,12 @@ begin
   case lvl of
   BGHigh:
     Result := #27'[31m';
+  BGRangeHI:
+    Result := #27'[33m';
   BGLOW:
     Result := #27'[34m';
+  BGRangeLO:
+    Result := #27'[36m';
   else
     Result := #27'[32m';
   end;

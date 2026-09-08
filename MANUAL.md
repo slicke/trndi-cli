@@ -9,6 +9,7 @@ trndi-cli reads the settings the [Trndi](https://github.com/slicke/trndi) GUI sa
 - [Linux](#linux)
 - [Windows](#windows)
 - [Backends](#backends)
+- [Colors](#colors)
 - [Stats thresholds](#stats-thresholds)
 - [Troubleshooting](#troubleshooting)
 
@@ -30,7 +31,7 @@ whatever the backend reports, in the same order the GUI applies them (see
 | Key                                   | Meaning                                                     |
 |---------------------------------------|-------------------------------------------------------------|
 | `override.hi` / `override.lo`         | The hard high/low limits — graph red/blue, named at the right of graph mode's key bar, `--check` exit codes |
-| `override.rangehi` / `override.rangelo` | The personal in-range band                                |
+| `override.rangehi` / `override.rangelo` | The personal in-range band — the `--stats` five-band split, a pair of green gridlines in graph mode, and the yellow/cyan bars between it and the hard limits |
 | `wizard.hi` / `wizard.lo`             | The GUI wizard's limits, used only when the backend reports none |
 
 The rest of this page describes those values and where they live. Setting
@@ -40,7 +41,8 @@ them from trndi-cli itself is one command — see below.
 
 `trndi-cli --setup` opens a Free Vision window over the settings, on two pages:
 **[1] Connection**, with the backend picker and the address and secret fields,
-and **[2] Display**, with the unit and the two hard limits. The numbers are the
+and **[2] Display**, with the unit, the two hard limits and the in-range band
+inside them. The numbers are the
 keys: `Alt-1` and `Alt-2` switch between the pages, as do `Ctrl-PgUp` and
 `Ctrl-PgDn`. OK, Test and Cancel sit below both and apply to the pair, so a
 page never has to be visited to be saved.
@@ -68,6 +70,14 @@ up from either side. Three things worth knowing:
 - **The limit fields are typed in the display unit** but stored as the mg/dL
   `override.hi`/`override.lo` keys the GUI applies too, so both apps color by
   the same thresholds. Blank leaves the backend's own limits in charge.
+- **The range pair nests inside the limits.** `Range high`/`Range low` write
+  `override.rangehi`/`override.rangelo` — the narrower band the graph draws as
+  green gridlines, colors yellow above and cyan below, and `--stats` splits its
+  five bands along. Saving refuses a
+  range that meets or passes a limit typed beside it, since such a bound leaves
+  its band empty and its gridline on the color boundary it should sit inside.
+  Only the pairs both on screen are checked: a blank limit means the backend's
+  own, which the window does not know.
 
 The window needs a terminal of at least 68x22, and a terminal at all: with
 input or output redirected, `--setup` refuses (exit 64) and an unconfigured run
@@ -154,6 +164,24 @@ Tandem up to about four weeks, while Dexcom Share hands out at most the last
 hours and CareLink about a day. Below three distinct days of data the AGP is
 declined with a message naming how much history came back.
 
+## Colors
+
+Five, on the graph, the sparkline and the AGP view alike, running cold to warm:
+
+| Color  | Level                                      |
+|--------|--------------------------------------------|
+| blue   | at or below the hard low limit             |
+| cyan   | under the personal range, above that limit |
+| green  | inside the range                           |
+| yellow | over the personal range, under the limit   |
+| red    | at or above the hard high limit            |
+
+The middle three collapse to plain green when no personal range is set, which
+is the red/green/blue scheme trndi-cli had before: with no range configured the
+API never reports the two sublevels. Only the outer pair carries into
+`--check`'s exit codes. The terminal driver emits the 8 base colors and no
+intensity, so these five are as far apart as the medium allows.
+
 ## Stats thresholds
 
 `--stats` splits the period into bands using the thresholds the backend itself
@@ -168,7 +196,9 @@ the backend's — whatever the GUI's override checkbox says, since the GUI
 applies them the same way. The result feeds every threshold consumer alike:
 the graph and sparkline colors, the stats bands and the `--check` exit codes.
 A personal bound that meets the hard limit folds its band away rather than
-print an empty `10.0-10.0` row.
+print an empty `10.0-10.0` row. The same pair is drawn in graph mode as two
+green gridlines, so the band `--stats` counts against is visible on the graph
+it came from, and the bars either side of it take the band's own colors.
 
 Percentages are shares of the readings in the period, and each band's duration
 is its share counted at the backend's reporting interval. The `coverage` figure
@@ -193,8 +223,9 @@ trndi-cli exits with a distinct code and a message on stderr:
 `--check` prints the same line as a plain run; the exit code uses the same
 thresholds the graph colors and `--stats` bands come from — the backend's own,
 as adjusted by any overrides. A
-personal target range narrower than the hard limits does not trip it — like the
-graph, only red and blue count.
+personal target range narrower than the hard limits does not trip it: the graph
+marks it with its own yellow and cyan, but only the hard limits — red and blue —
+set exit codes 5 and 6.
 
 **Reporting a bug** — `trndi-cli --version` prints what a report needs: the
 CLI's own revision, the Trndi build its API layer was vendored from, and the

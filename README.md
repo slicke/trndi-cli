@@ -15,11 +15,11 @@ $ trndi-cli
 12.9 mmol/L → (±0.0)  21:55
 ```
 
-With `--graph`, a Free Vision text UI shows the last hours as a bar graph — red above your high threshold, blue below the low one, green in range — refreshed every 5 minutes:
+With `--graph`, a Free Vision text UI shows the last hours as a bar graph — red above your high threshold, blue below the low one, green in range, and where you have set a personal target range, yellow and cyan for the room between it and those limits — refreshed every 5 minutes:
 
 ![The graph mode: eight hours of readings as coloured bars, with a shaded forecast past the divider on the right](doc/img/graph.png)
 
-`F5` refetches, `F9` opens the settings window and `Q` leaves (`Alt-X` and `Ctrl-X` do too); the key bar sits along the bottom of the terminal. The thresholds the colors mean sit at the right-hand end of that bar — `hi 10.0  lo 3.9`, the numbers in the same red and blue — so the graph explains its own palette. They need a terminal about 85 columns wide; below that the keys have the row to themselves.
+`F5` refetches, `F9` opens the settings window and `Q` leaves (`Alt-X` and `Ctrl-X` do too); the key bar sits along the bottom of the terminal. The thresholds the colors mean sit at the right-hand end of that bar — `hi 10.0  lo 3.9`, the numbers in the same red and blue — so the graph explains its own palette. They need a terminal about 85 columns wide; below that the keys have the row to themselves. A personal in-range band, where one is set, is drawn as two green gridlines across the plot, with the bars above and below it in yellow and cyan.
 The arrow keys walk a cursor across the bars — the header shows the exact value and time of the highlighted reading, `Home`/`End` jump to the oldest and newest — and stepping right past the newest reading (or `Esc`) returns the header to the live view. A refresh keeps the cursor on its reading.
 
 `F6` (or starting with `--predict`) adds a half-hour forecast past a divider on the right, drawn in shade rather than solid so it never reads as measured data. It comes from Trndi's own prediction model — a robust weighted regression with a curvature term — and appears only when the fit is worth showing: a flat trend or a noisy sensor leaves it out entirely, and the header carries the horizon and the model's own confidence (`forecast ▒ +30 min 66%`). It is off by default and knows nothing about insulin or carbs, so treat it as the shape of the last half hour continued, not a plan.
@@ -101,7 +101,7 @@ Every green build on `main` publishes binaries for Linux (x86-64, ARM64 and i686
 
 ## Configuration
 
-Configured Trndi GUI = done. Without the GUI, `--setup` opens a settings window in the same Free Vision style as the graph — a `[1] Connection` page with the backend, address and secret, a `[2] Display` page with the unit and limits (`Alt-1` and `Alt-2` switch), and a Test button that connects before you save. `F9` opens the same window from graph mode.
+Configured Trndi GUI = done. Without the GUI, `--setup` opens a settings window in the same Free Vision style as the graph — a `[1] Connection` page with the backend, address and secret, a `[2] Display` page with the unit, the limits and the in-range band (`Alt-1` and `Alt-2` switch), and a Test button that connects before you save. `F9` opens the same window from graph mode.
 
 ```
 ╔═[■]═════════════════════ Trndi settings ═════════════════════════╗
