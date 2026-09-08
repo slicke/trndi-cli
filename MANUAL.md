@@ -29,7 +29,7 @@ whatever the backend reports, in the same order the GUI applies them (see
 
 | Key                                   | Meaning                                                     |
 |---------------------------------------|-------------------------------------------------------------|
-| `override.hi` / `override.lo`         | The hard high/low limits — graph red/blue, `--check` exit codes |
+| `override.hi` / `override.lo`         | The hard high/low limits — graph red/blue, named at the right of graph mode's key bar, `--check` exit codes |
 | `override.rangehi` / `override.rangelo` | The personal in-range band                                |
 | `wizard.hi` / `wizard.lo`             | The GUI wizard's limits, used only when the backend reports none |
 

@@ -124,6 +124,11 @@ const
   chPredHalf = #176;  // CP437 light shade, as the half step
   chDivider = #179;   // CP437 vertical line: the "now" boundary
   MARGIN = 8;         // room for scale labels: "  12.3 |"
+  // What TrndiAPI.initCGMCore leaves behind when neither the backend nor the
+  // settings supplied a threshold: 401 is above and 40 below anything a CGM
+  // reports, so the pair colors everything in range.
+  CGM_HI_UNSET = 401;
+  CGM_LO_UNSET = 40;
 
 var
   gApi: TrndiAPI = nil;
@@ -211,7 +216,7 @@ begin
   // supplied no high limit of its own (401 is initCGMCore's untouched
   // default), the override pair always. Same keys, same order, so the graph,
   // spark, stats bands and --check agree with the desktop app.
-  if api.cgmHi = 401 then
+  if api.cgmHi = CGM_HI_UNSET then
   begin
     if s.wizHi > 0 then
       api.cgmHi := s.wizHi;
@@ -706,6 +711,15 @@ type
     constructor Init(var R: TRect);
   end;
 
+  // The key bar carries the thresholds as well: it is the one row that is
+  // always on screen, never competes with data, and has the width to spare —
+  // the graph's own header and time legend both run out of room on a full
+  // day of history.
+  PLimitStatusLine = ^TLimitStatusLine;
+  TLimitStatusLine = object(TStatusLine)
+    procedure Draw; virtual;
+  end;
+
   TTrndiTui = object(TApplication)
     constructor Init;
     procedure InitStatusLine; virtual;
@@ -729,6 +743,31 @@ begin
   else
     Result := $02;  // green on black (incl. the personal-limit sublevels)
   end;
+end;
+
+// The thresholds the bars are colored by, in the display unit. Without them
+// the colors are a code the window never breaks: red starts somewhere, and
+// the only way to learn where is to open the settings window. False when
+// there is nothing worth saying.
+function LimitTexts(out hi, lo: string): boolean;
+
+  function Val(mgdl: integer): string;
+  begin
+    if gUnit = mmol then
+      Result := Format('%.1f', [mgdl * TrndiAPI.toMMOL])
+    else
+      Result := IntToStr(mgdl);
+  end;
+
+begin
+  // Nothing set anywhere: the pair is initCGMCore's, everything is "in
+  // range", and two placeholder numbers would only look like settings.
+  Result := (gApi <> nil) and ((gApi.cgmHi <> CGM_HI_UNSET) or
+    (gApi.cgmLo <> CGM_LO_UNSET));
+  if not Result then
+    exit;
+  hi := Val(gApi.cgmHi);
+  lo := Val(gApi.cgmLo);
 end;
 
 // The AGP view: every fetched day folded onto one 24-hour axis. Per
@@ -1212,6 +1251,48 @@ begin
   DeskTop^.Insert(GraphWin);
 end;
 
+// The bar's own items first, then the thresholds right-aligned in what is
+// left. Colored to match the bars they explain, on the bar's own background
+// rather than the graph's black, so they sit in the row instead of on it.
+procedure TLimitStatusLine.Draw;
+var
+  B: TDrawBuffer;
+  item: PStatusItem;
+  hi, lo: string;
+  norm: byte;
+  used, at, w: integer;
+begin
+  inherited Draw;
+  if not LimitTexts(hi, lo) then
+    exit;
+  // Where the keys end, measured the way TStatusLine.DrawSelect lays them out.
+  used := 0;
+  item := Items;
+  while item <> nil do
+  begin
+    if item^.Text <> nil then
+      Inc(used, CStrLen(' ' + item^.Text^ + ' '));
+    item := item^.Next;
+  end;
+  // Two columns between the pair, one of air against the right edge, and four
+  // clear of the last key so the two never read as one list.
+  hi := 'hi ' + hi;
+  lo := 'lo ' + lo;
+  w := Length(hi) + 2 + Length(lo);
+  at := Size.X - 1 - w;
+  if at < used + 4 then
+    exit;
+  // The bar's own colors, then the level color on the numbers alone: this row
+  // draws its shortcut keys in red, so a red "hi" would read as one of them.
+  norm := byte(GetColor($0301));
+  MoveChar(B, ' ', norm, w);
+  MoveStr(B, hi, norm);
+  MoveStr(B[3], Copy(hi, 4, MaxInt), (norm and $F0) or $04);
+  MoveStr(B[Length(hi) + 2], lo, norm);
+  MoveStr(B[Length(hi) + 5], Copy(lo, 4, MaxInt), (norm and $F0) or $01);
+  WriteLine(at, 0, w, 1, B);
+end;
+
 procedure TTrndiTui.InitStatusLine;
 var
   R: TRect;
@@ -1222,7 +1303,7 @@ begin
   // exit keys and the arrow keys reach HandleEvent on their own, these just
   // say they do something.
   // #27#26 are CP437's left/right arrows, same route as the block glyphs.
-  StatusLine := New(PStatusLine, Init(R,
+  StatusLine := New(PLimitStatusLine, Init(R,
     NewStatusDef(0, $FFFF,
       NewStatusKey('~Q~ Exit', kbNoKey, 0,
       NewStatusKey('~F5~ Refresh', kbF5, cmRefresh,
@@ -1335,9 +1416,12 @@ begin
         FetchAgp(gAgpDaysReq);
       end;
     end;
-    // Redraw either way: the dialog covered the graph while it was open.
+    // Redraw either way: the dialog covered the graph while it was open. The
+    // key bar too — it carries thresholds the dialog may just have changed.
     if GraphWin <> nil then
       GraphWin^.Redraw;
+    if StatusLine <> nil then
+      StatusLine^.DrawView;
     ClearEvent(Event);
   end
   else if Event.What = evKeyDown then

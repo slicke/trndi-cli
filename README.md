@@ -19,7 +19,7 @@ With `--graph`, a Free Vision text UI shows the last hours as a bar graph — re
 
 ![The graph mode: eight hours of readings as coloured bars, with a shaded forecast past the divider on the right](doc/img/graph.png)
 
-`F5` refetches, `F9` opens the settings window and `Q` leaves (`Alt-X` and `Ctrl-X` do too); the key bar sits along the bottom of the terminal.
+`F5` refetches, `F9` opens the settings window and `Q` leaves (`Alt-X` and `Ctrl-X` do too); the key bar sits along the bottom of the terminal. The thresholds the colors mean sit at the right-hand end of that bar — `hi 10.0  lo 3.9`, the numbers in the same red and blue — so the graph explains its own palette. They need a terminal about 85 columns wide; below that the keys have the row to themselves.
 The arrow keys walk a cursor across the bars — the header shows the exact value and time of the highlighted reading, `Home`/`End` jump to the oldest and newest — and stepping right past the newest reading (or `Esc`) returns the header to the live view. A refresh keeps the cursor on its reading.
 
 `F6` (or starting with `--predict`) adds a half-hour forecast past a divider on the right, drawn in shade rather than solid so it never reads as measured data. It comes from Trndi's own prediction model — a robust weighted regression with a curvature term — and appears only when the fit is worth showing: a flat trend or a noisy sensor leaves it out entirely, and the header carries the horizon and the model's own confidence (`forecast ▒ +30 min 66%`). It is off by default and knows nothing about insulin or carbs, so treat it as the shape of the last half hour continued, not a plan.
