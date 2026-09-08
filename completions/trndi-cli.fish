@@ -2,7 +2,7 @@
 # Install: copy to ~/.config/fish/completions/ or
 # /usr/share/fish/vendor_completions.d/. `make install-completions` does the copy.
 #
-# Keep the option list in step with Usage in src/trndicli.pas.
+# Keep the option list in step with Usage in src/trndicli.pp.
 
 complete -c trndi-cli -f
 complete -c trndi-cli -s c -l check -d 'Print the reading, with the range in the exit code: 5 high, 6 low'

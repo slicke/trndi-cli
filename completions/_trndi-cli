@@ -3,7 +3,7 @@
 # Install: copy to a directory in $fpath, e.g. /usr/share/zsh/site-functions/.
 # `make install-completions` does the copy.
 #
-# Keep the option list in step with Usage in src/trndicli.pas. The exclusion
+# Keep the option list in step with Usage in src/trndicli.pp. The exclusion
 # lists mirror the "cannot be combined" checks there: one mode per run.
 
 local -a modes

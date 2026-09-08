@@ -35,13 +35,13 @@ $(VERSION_INC): FORCE
 
 FORCE:
 
-bin/trndi-cli: src/trndicli.pas src/trndicli.settings.pas $(VERSION_INC) $(wildcard $(T)/units/trndi/*.pp $(T)/units/trndi/api/*.pp)
+bin/trndi-cli: src/trndicli.pp src/trndicli.settings.pp $(VERSION_INC) $(wildcard $(T)/units/trndi/*.pp $(T)/units/trndi/api/*.pp)
 	@mkdir -p build bin
-	$(FPC) $(FPCFLAGS) src/trndicli.pas
+	$(FPC) $(FPCFLAGS) src/trndicli.pp
 
-debug: src/trndicli.pas $(VERSION_INC)
+debug: src/trndicli.pp $(VERSION_INC)
 	@mkdir -p build bin
-	$(FPC) $(FPCFLAGS) -g -gl -gh src/trndicli.pas
+	$(FPC) $(FPCFLAGS) -g -gl -gh src/trndicli.pp
 
 clean:
 	rm -rf build bin

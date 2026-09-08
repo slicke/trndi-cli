@@ -69,6 +69,6 @@ if (-not (Test-Path $versionPath) -or
     Set-Content -Path $versionPath -Value $versionInc -Encoding ASCII
 }
 
-& $fpc @flags src/trndicli.pas
+& $fpc @flags src/trndicli.pp
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host 'Built bin\trndi-cli.exe'

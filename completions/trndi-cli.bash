@@ -2,7 +2,7 @@
 # Install: copy to /usr/share/bash-completion/completions/trndi-cli
 # (or source this file from ~/.bashrc). `make install-completions` does the copy.
 #
-# Keep the option list in step with Usage in src/trndicli.pas.
+# Keep the option list in step with Usage in src/trndicli.pp.
 
 _trndi_cli()
 {
