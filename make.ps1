@@ -26,7 +26,7 @@ $flags = @(
     '-Mobjfpc', '-Sh', '-dX_CONSOLE', '-dWITHTHREADS',
     "-Fu$T/units/trndi", "-Fu$T/units/trndi/api",
     "-Fu$T/units/slicke", "-Fu$T/units/misc",
-    "-Fi$T/inc", '-Fibuild', '-FUbuild', '-FEbin', '-otrndi-cli.exe'
+    "-Fi$T/inc", '-Filib', '-FUlib', '-FEbin', '-otrndi-cli.exe'
 )
 
 # Build identity for --version, mirroring the Makefile's $(VERSION_INC) rule.
@@ -45,13 +45,13 @@ switch ($Target) {
     'release' { }
     'debug'   { $flags += @('-g', '-gl', '-gh') }
     'clean'   {
-        Remove-Item -Recurse -Force build, bin -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force lib, bin -ErrorAction SilentlyContinue
         exit 0
     }
     default   { throw "Unknown target '$Target' (release, debug, clean)" }
 }
 
-New-Item -ItemType Directory -Force build, bin | Out-Null
+New-Item -ItemType Directory -Force lib, bin | Out-Null
 
 $cliDesc = Get-Describe @('describe', '--tags', '--always', '--dirty')
 $trndiDesc = Get-Describe @('-C', $T, 'describe', '--tags', '--always')
@@ -63,7 +63,7 @@ $versionInc = @(
     "  CLI_VERSION = '$cliDesc';"
     "  CLI_TRNDI = '$trndiDesc';"
 ) -join "`n"
-$versionPath = 'build/cliversion.inc'
+$versionPath = 'lib/cliversion.inc'
 if (-not (Test-Path $versionPath) -or
     ((Get-Content $versionPath -Raw) -replace "`r`n", "`n").TrimEnd() -ne $versionInc) {
     Set-Content -Path $versionPath -Value $versionInc -Encoding ASCII

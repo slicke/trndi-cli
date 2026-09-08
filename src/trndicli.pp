@@ -2231,7 +2231,7 @@ begin
     writeln(n);
 end;
 
-// Build identity. The Makefile (and make.ps1) write build/cliversion.inc
+// Build identity. The Makefile (and make.ps1) write lib/cliversion.inc
 // before each compile with the two constants below; it is generated rather
 // than committed, so a plain "fpc src/trndicli.pp" outside the build system
 // will not find it. See the $(VERSION_INC) rule.
