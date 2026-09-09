@@ -95,6 +95,42 @@ Windows (PowerShell, FPC from a [Lazarus](https://www.lazarus-ide.org/) install 
 
 Running on Windows needs `libcurl.dll` ([curl.se/windows](https://curl.se/windows/), rename `libcurl-x64.dll`) next to the exe or in `PATH`.
 
+### Windows on ARM64
+
+Not in the published release set — build it by cross-compiling from Linux. It
+needs FPC **trunk** (3.2.2 cannot target `aarch64-win64`) and **llvm-mingw**
+rather than binutils, because FPC assembles this target with clang and not GAS.
+The container below carries both, so nothing is installed on the host:
+
+```bash
+podman run --rm -v "$PWD:/src:Z" -w /src docker.io/mstorsjo/llvm-mingw:latest sh -c '
+  set -e
+  apt-get update -qq && apt-get install -y -qq fpc make git
+  # gitlab.freepascal.org is unreachable on some networks; this is the project mirror.
+  git clone --quiet --depth 1 --branch main https://github.com/fpc/FPCSource.git /tmp/fpcsrc
+  cd /tmp/fpcsrc
+  # Without BINUTILSPREFIX, FPC looks for an assembler called aarch64-win64-clang
+  # and the RTL build dies on its very first unit.
+  make crossall crossinstall CPU_TARGET=aarch64 OS_TARGET=win64 \
+       BINUTILSPREFIX=aarch64-w64-mingw32- INSTALL_PREFIX=/tmp/fpctrunk
+  cd /src && V=$(ls /tmp/fpctrunk/lib/fpc)
+  # -Fu<dir>/* is what a generated fpc.cfg would supply: the packages live in
+  # subdirectories, so without it DateUtils (rtl-objpas) is not found.
+  make FPC=/tmp/fpctrunk/lib/fpc/$V/ppcrossa64 \
+       FPCEXTRA="-Twin64 -Paarch64 -XPaarch64-w64-mingw32- \
+                 -Fu/tmp/fpctrunk/lib/fpc/$V/units/aarch64-win64/* -otrndi-cli.exe"
+'
+```
+
+Building the cross compiler is the slow part — it compiles the RTL and the full
+package set for the target — so cache `/tmp/fpctrunk` if you do this more than
+once.
+
+At runtime the ARM64 build needs an ARM64 `libcurl.dll`, not the x64 one: take
+`win64a-mingw` from [curl.se/windows](https://curl.se/windows/) and rename
+`libcurl-arm64.dll`. The exe imports it at load time, so without it the program
+does not start at all rather than failing when it first makes a request.
+
 Every green build on `main` publishes binaries for Linux (x86-64, ARM64 and i686), FreeBSD, Haiku and Windows under [Releases](https://github.com/slicke/trndi-cli/releases).
 
 `sudo make install` puts the binary in `/usr/local/bin` together with tab completion for bash, zsh and fish (`PREFIX`/`DESTDIR` respected for packagers). The completions also work on their own: `make install-completions`, or source `completions/trndi-cli.bash` from your `.bashrc`.
