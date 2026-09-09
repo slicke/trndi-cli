@@ -10,6 +10,7 @@ complete -c trndi-cli -s g -l graph -d 'Interactive TUI with a reading graph (F5
 complete -c trndi-cli -s s -l stats -d 'Summarise the last H hours (default 24, max 168)' -x
 complete -c trndi-cli -l spark -d 'The last H hours as a sparkline (default 3, max 24)' -x
 complete -c trndi-cli -l agp -d 'Time-of-day glucose profile of the last D days (default 14, max 28)' -x
+complete -c trndi-cli -l csv -d 'The last H hours of readings as CSV (default 24, max 168)' -x
 complete -c trndi-cli -l predict -d 'Graph mode: start with the forecast drawn (F6 toggles)'
 complete -c trndi-cli -s u -l unit -d 'Show values in this unit for this run only' -x -a 'mmol mgdl'
 # A bare `trndi-cli --profile` prints the accounts one per line, so the real

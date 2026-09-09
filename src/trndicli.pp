@@ -45,8 +45,9 @@
   the recent history becomes a one-line sparkline, colored by the same
   thresholds as the graph. With --agp (or F7 in graph mode) the last two
   weeks fold onto one 24-hour axis as a median line with percentile bands —
-  an Ambulatory Glucose Profile. With --check the exit code carries where
-  the reading sits: 0 in range, 5 high, 6 low.
+  an Ambulatory Glucose Profile. With --csv the readings of a period come
+  out as CSV for a spreadsheet or a script. With --check the exit code
+  carries where the reading sits: 0 in range, 5 high, 6 low.
 
   Settings are read from the GUI's config (~/.config/Trndi.cfg on Linux), so
   a machine with a configured Trndi needs no setup. With --profile every mode
@@ -1835,6 +1836,90 @@ begin
 end;
 
 {------------------------------------------------------------------------------
+  Export (--csv)
+ ------------------------------------------------------------------------------}
+
+const
+  // The same window as --stats: the readings a summary is made from are
+  // the ones worth taking somewhere else.
+  CSV_DEFAULT_HOURS = STATS_DEFAULT_HOURS;
+  CSV_MAX_HOURS = STATS_MAX_HOURS;
+  // Plain words rather than the arrows: a spreadsheet filter or a grep can
+  // match these, and they survive a terminal without Unicode.
+  CSV_TREND_NAMES: array[BGTrend] of string =
+    ('DoubleUp', 'SingleUp', 'FortyFiveUp', 'Flat', 'FortyFiveDown',
+    'SingleDown', 'DoubleDown', 'NotComputable', '');
+  CSV_LEVEL_NAMES: array[BGValLevel] of string =
+    ('range-high', 'range-low', 'in-range', 'high', 'low');
+
+// A number the way every CSV reader expects one: a period as the decimal
+// point whatever the locale, one decimal for mmol/L, none for mg/dL.
+function CsvNum(v: double): string;
+var
+  fs: TFormatSettings;
+begin
+  fs := DefaultFormatSettings;
+  fs.DecimalSeparator := '.';
+  if gUnit = mmol then
+    Result := FormatFloat('0.0', v, fs)
+  else
+    Result := FormatFloat('0', v, fs);
+end;
+
+// The last `hours` hours of readings as CSV on stdout, oldest first: one
+// reading per line with its local time, the value and delta in the display
+// unit, the trend the backend attached and the range band it falls in. The
+// band uses the same thresholds as the graph colors and --stats, so a
+// spreadsheet can count time in range the way trndi-cli does. Nothing is
+// quoted since no field can carry a comma or a newline.
+procedure RunCsv(hours: integer);
+var
+  readings: BGResults;
+  cutoff: TDateTime;
+  i, n: integer;
+  interval: integer;
+  delta: string;
+begin
+  interval := gApi.getReportingInterval;
+  if interval < 1 then
+    interval := 5;
+  readings := FetchReadingsSafe(hours * 60, hours * 60 div interval + 16);
+  SortReadingsAscending(readings);
+  cutoff := IncMinute(Now, -hours * 60);
+
+  n := 0;
+  for i := 0 to High(readings) do
+    if readings[i].date >= cutoff then
+      Inc(n);
+  if n = 0 then
+  begin
+    if gFetchErr <> '' then
+      writeln(stderr, 'History fetch failed: ', gFetchErr)
+    else
+      writeln(stderr, Format('No readings in the last %d h.', [hours]));
+    halt(4);
+  end;
+
+  writeln('time,value,unit,delta,trend,level');
+  for i := 0 to High(readings) do
+  begin
+    if readings[i].date < cutoff then
+      continue;
+    if readings[i].deltaEmpty then
+      delta := ''
+    else
+      delta := CsvNum(readings[i].convert(gUnit, BGDelta));
+    writeln(Format('%s,%s,%s,%s,%s,%s', [
+      FormatDateTime('yyyy-mm-dd"T"hh:nn:ss', readings[i].date),
+      CsvNum(readings[i].convert(gUnit)),
+      BG_UNIT_NAMES[gUnit],
+      delta,
+      CSV_TREND_NAMES[readings[i].trend],
+      CSV_LEVEL_NAMES[gApi.getLevel(readings[i].convert(mgdl))]]));
+  end;
+end;
+
+{------------------------------------------------------------------------------
   Sparkline (--spark)
  ------------------------------------------------------------------------------}
 
@@ -2276,6 +2361,8 @@ begin
   writeln('      --agp [D]    time-of-day profile of the last D days: median and');
   writeln(Format('                   percentile bands (default %d, max %d; F7 in graph mode)',
     [AGP_DEFAULT_DAYS, AGP_MAX_DAYS]));
+  writeln(Format('      --csv [H]    the last H hours as CSV, oldest first (default %d, max %d)',
+    [CSV_DEFAULT_HOURS, CSV_MAX_HOURS]));
   writeln('      --predict    graph mode: start with the forecast drawn (F6 toggles)');
   writeln('  -u, --unit U     show values in U (mmol or mgdl) for this run, whatever');
   writeln('                   the settings say; the setting itself is left alone');
@@ -2328,12 +2415,14 @@ var
   setupMode: boolean = false;
   checkMode: boolean = false;
   agpMode: boolean = false;
+  csvMode: boolean = false;
   profileMode: boolean = false;
   profileName: string = '';
   profileErr: string = '';
   statsHours: integer = STATS_DEFAULT_HOURS;
   sparkHours: integer = SPARK_DEFAULT_HOURS;
   agpDays: integer = AGP_DEFAULT_DAYS;
+  csvHours: integer = CSV_DEFAULT_HOURS;
 begin
   OnGetApplicationName := @TrndiAppName;
 
@@ -2399,6 +2488,21 @@ begin
           BadUsage(Format('--agp takes a number of days between %d and %d, got "%s".',
             [AGP_MIN_DAYS, AGP_MAX_DAYS, val]));
     end;
+    '--csv':
+    begin
+      csvMode := true;
+      // "--csv 48", "--csv=48" or bare, as --stats.
+      if (val = '') and (i < ParamCount) and IsNumeric(ParamStr(i + 1)) then
+      begin
+        val := ParamStr(i + 1);
+        Inc(i);
+      end;
+      if val <> '' then
+        if (not IsNumeric(val)) or (not TryStrToInt(val, csvHours)) or
+          (csvHours < 1) or (csvHours > CSV_MAX_HOURS) then
+          BadUsage(Format('--csv takes a number of hours between 1 and %d, got "%s".',
+            [CSV_MAX_HOURS, val]));
+    end;
     '-p', '--profile':
     begin
       profileMode := true;
@@ -2453,14 +2557,16 @@ begin
     Inc(i);
   end;
 
-  if ord(graphMode) + ord(statsMode) + ord(sparkMode) + ord(agpMode) > 1 then
-    BadUsage('--graph, --stats, --spark and --agp cannot be combined.');
-  if setupMode and (graphMode or statsMode or sparkMode or agpMode) then
-    BadUsage('--setup cannot be combined with --graph, --stats, --spark or --agp.');
-  if checkMode and (graphMode or statsMode or sparkMode or agpMode or setupMode) then
-    BadUsage('--check cannot be combined with --graph, --stats, --spark, --agp or --setup.');
+  if ord(graphMode) + ord(statsMode) + ord(sparkMode) + ord(agpMode) +
+    ord(csvMode) > 1 then
+    BadUsage('--graph, --stats, --spark, --agp and --csv cannot be combined.');
+  if setupMode and (graphMode or statsMode or sparkMode or agpMode or csvMode) then
+    BadUsage('--setup cannot be combined with --graph, --stats, --spark, --agp or --csv.');
+  if checkMode and (graphMode or statsMode or sparkMode or agpMode or csvMode or
+    setupMode) then
+    BadUsage('--check cannot be combined with --graph, --stats, --spark, --agp, --csv or --setup.');
   if profileMode and (profileName = '') and (graphMode or statsMode or
-    sparkMode or agpMode or setupMode or checkMode) then
+    sparkMode or agpMode or csvMode or setupMode or checkMode) then
     BadUsage('A bare --profile lists the accounts; give it a name to ' +
       'combine with other options.');
 
@@ -2506,6 +2612,8 @@ begin
       RunSpark(sparkHours)
     else if agpMode then
       RunAGP(agpDays)
+    else if csvMode then
+      RunCsv(csvHours)
     else
       RunOnce(checkMode);
   finally
