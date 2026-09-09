@@ -21,8 +21,12 @@ _trndi_cli()
         COMPREPLY=($(compgen -W "$(trndi-cli --profile 2>/dev/null)" -- "$cur"))
         return
         ;;
+    -u|--unit)
+        COMPREPLY=($(compgen -W 'mmol mgdl' -- "$cur"))
+        return
+        ;;
     esac
 
-    COMPREPLY=($(compgen -W '--check --graph --stats --spark --agp --predict --profile --setup --help --version' -- "$cur"))
+    COMPREPLY=($(compgen -W '--check --graph --stats --spark --agp --predict --unit --profile --setup --help --version' -- "$cur"))
 }
 complete -F _trndi_cli trndi-cli

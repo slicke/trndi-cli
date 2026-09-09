@@ -22,7 +22,7 @@ Four settings select and connect the backend:
 | `remote.type`   | Which backend to talk to                            | a code from [Backends](#backends) |
 | `remote.target` | Backend address                                     | e.g. `https://my.nightscout.site` |
 | `remote.creds`  | Credential (secret, token or password — see below)  |                              |
-| `unit`          | Display unit                                        | `mmol` (default) or `mgdl`   |
+| `unit`          | Display unit (`--unit` overrides it for one run)    | `mmol` (default) or `mgdl`   |
 
 Six more are optional threshold overrides — mg/dL integers, applied on top of
 whatever the backend reports, in the same order the GUI applies them (see
@@ -218,7 +218,7 @@ trndi-cli exits with a distinct code and a message on stderr:
 | `4` | No recent reading | Backend reachable but silent > 24 h (with `--stats`: nothing in the requested window; with `--agp`: fewer than 3 days of history came back; with `--check`: also a stale fallback, so scripts never alarm on old data) — check the uploader |
 | `5` | Above the high threshold | Only from `--check` — an answer, not an error |
 | `6` | Below the low threshold | Only from `--check` — an answer, not an error |
-| `64` | Bad command line | Unknown option, a `--stats`, `--spark` or `--agp` window outside its range, a `--profile` name not in the accounts, or `--setup` without a terminal |
+| `64` | Bad command line | Unknown option, a `--stats`, `--spark` or `--agp` window outside its range, a `--unit` other than `mmol`/`mgdl`, a `--profile` name not in the accounts, or `--setup` without a terminal |
 
 `--check` prints the same line as a plain run; the exit code uses the same
 thresholds the graph colors and `--stats` bands come from — the backend's own,

@@ -41,6 +41,8 @@ With `--agp` (or `F7` in graph mode) the last two weeks fold onto a single 24-ho
 
 The profile needs several days of history in one request, which the backend decides: Nightscout, xDrip and Tandem serve the full two weeks, while Dexcom Share, FreeStyle Libre and CareLink only hand out the last day or so — there the chart is honestly declined with a message, since percentiles over one day would just be that day.
 
+`--unit mgdl` (or `mmol`) shows one run in the other unit without touching the stored setting — for a script that feeds a mg/dL widget on a machine whose GUI shows mmol/L, say. Everything follows it: the reading line, the graph scale, the stats, the sparkline and the AGP.
+
 Trndi's multi-user mode carries over: on a machine following more than one person, `--profile` names which account a run reads — `-p Anna --graph` in one terminal, `-p Bertil --check` in a cron job — and a bare `--profile` lists the accounts. They are the same accounts the GUI manages, matched case-insensitively, and the graph names its account in the frame title so two windows side by side stay tellable apart. On a machine without the GUI, `--setup --profile Anna` creates the account on save.
 
 ## Usage
@@ -57,6 +59,7 @@ trndi-cli --spark       the last 3 h as a one-line sparkline
 trndi-cli --spark 8     ... or any window from 1 to 24 hours
 trndi-cli --agp         time-of-day percentile profile of the last 14 days
 trndi-cli --agp 7       ... or any window from 3 to 28 days
+trndi-cli --unit mgdl   any mode above in mg/dL (or mmol) for this run only
 trndi-cli --profile     list the accounts of Trndi's multi-user mode
 trndi-cli -p Anna ...   any mode above against that account's settings
 trndi-cli --setup       settings window: backend, address, secret, unit, limits

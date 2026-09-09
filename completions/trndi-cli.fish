@@ -11,6 +11,7 @@ complete -c trndi-cli -s s -l stats -d 'Summarise the last H hours (default 24, 
 complete -c trndi-cli -l spark -d 'The last H hours as a sparkline (default 3, max 24)' -x
 complete -c trndi-cli -l agp -d 'Time-of-day glucose profile of the last D days (default 14, max 28)' -x
 complete -c trndi-cli -l predict -d 'Graph mode: start with the forecast drawn (F6 toggles)'
+complete -c trndi-cli -s u -l unit -d 'Show values in this unit for this run only' -x -a 'mmol mgdl'
 # A bare `trndi-cli --profile` prints the accounts one per line, so the real
 # names complete; the option also works bare, hence no -x.
 complete -c trndi-cli -s p -l profile -d 'Use this multi-user account (bare: list accounts)' -a '(trndi-cli --profile 2>/dev/null)'

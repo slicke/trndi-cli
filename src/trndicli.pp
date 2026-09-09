@@ -133,6 +133,10 @@ const
 var
   gApi: TrndiAPI = nil;
   gUnit: BGUnit = mmol;
+  // --unit on the command line beats the stored setting for this run only;
+  // the setting itself is never touched, so a script can print mg/dL on a
+  // machine whose GUI shows mmol/L without changing what the GUI shows.
+  gUnitForced: boolean = false;
   gCurrent: BGReading;
   gHaveCurrent: boolean = false;
   gStale: boolean = false;
@@ -275,10 +279,11 @@ begin
       halt(1);
   end;
 
-  if s.mmol then
-    gUnit := mmol
-  else
-    gUnit := mgdl;
+  if not gUnitForced then
+    if s.mmol then
+      gUnit := mmol
+    else
+      gUnit := mgdl;
 
   if not BackendExists(s.backend) then
   begin
@@ -1423,10 +1428,13 @@ begin
   end;
   gApi.Free;
   gApi := api;
-  if s.mmol then
-    gUnit := mmol
-  else
-    gUnit := mgdl;
+  // A --unit on the command line stays in charge of this run, the way it
+  // did on the first connect; the saved setting is for the GUI and next time.
+  if not gUnitForced then
+    if s.mmol then
+      gUnit := mmol
+    else
+      gUnit := mgdl;
   FetchAll;
 end;
 
@@ -2269,6 +2277,8 @@ begin
   writeln(Format('                   percentile bands (default %d, max %d; F7 in graph mode)',
     [AGP_DEFAULT_DAYS, AGP_MAX_DAYS]));
   writeln('      --predict    graph mode: start with the forecast drawn (F6 toggles)');
+  writeln('  -u, --unit U     show values in U (mmol or mgdl) for this run, whatever');
+  writeln('                   the settings say; the setting itself is left alone');
   writeln('  -p, --profile N  use account N of the GUI''s multi-user mode; bare');
   writeln('                   --profile lists the accounts, --setup -p N creates one');
   writeln('      --setup      settings window: backend, address, secret, unit, limits');
@@ -2291,6 +2301,21 @@ begin
   writeln(stderr, msg);
   Usage;
   halt(64);
+end;
+
+// The spellings a unit is likely to be typed as: the settings key's own
+// values first, then the display names with or without their slash.
+function ParseUnit(const s: string; out u: BGUnit): boolean;
+begin
+  Result := true;
+  case LowerCase(Trim(s)) of
+  'mmol', 'mmol/l', 'mmoll':
+    u := mmol;
+  'mgdl', 'mg/dl':
+    u := mgdl;
+  else
+    Result := false;
+  end;
 end;
 
 var
@@ -2387,6 +2412,20 @@ begin
         Inc(i);
       end;
       profileName := val;
+    end;
+    '-u', '--unit':
+    begin
+      // "--unit mgdl" or "--unit=mgdl"; the value is required, so a
+      // following argument is taken even when it looks like an option and
+      // then rejected by name, which reads better than "unknown option".
+      if (val = '') and (i < ParamCount) then
+      begin
+        val := ParamStr(i + 1);
+        Inc(i);
+      end;
+      if not ParseUnit(val, gUnit) then
+        BadUsage(Format('--unit takes mmol or mgdl, got "%s".', [val]));
+      gUnitForced := true;
     end;
     '-c', '--check':
       checkMode := true;
