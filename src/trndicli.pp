@@ -46,7 +46,8 @@
   thresholds as the graph. With --agp (or F7 in graph mode) the last two
   weeks fold onto one 24-hour axis as a median line with percentile bands —
   an Ambulatory Glucose Profile. With --csv the readings of a period come
-  out as CSV for a spreadsheet or a script. With --check the exit code
+  out as CSV for a spreadsheet or a script. With --device the backend's
+  sensor and pump housekeeping is listed. With --check the exit code
   carries where the reading sits: 0 in range, 5 high, 6 low.
 
   Settings are read from the GUI's config (~/.config/Trndi.cfg on Linux), so
@@ -1920,6 +1921,151 @@ begin
 end;
 
 {------------------------------------------------------------------------------
+  Device status (--device)
+ ------------------------------------------------------------------------------}
+
+// Sensor life as a person counts it: days once there is more than a couple,
+// hours below that, and "under an hour" rather than "0 h" at the very end.
+function FmtSensorLeft(hours: integer): string;
+begin
+  if hours < 1 then
+    Result := 'under an hour left'
+  else if hours < 48 then
+    Result := Format('%d h left', [hours])
+  else if hours mod 24 = 0 then
+    Result := Format('%d d left', [hours div 24])
+  else
+    Result := Format('%d d %d h left (%d h)', [hours div 24, hours mod 24, hours]);
+end;
+
+procedure DeviceRow(const name, value: string);
+begin
+  writeln(Format('  %-13s %s', [name, value]));
+end;
+
+// What the backend knows about the hardware behind the readings: sensor life
+// and state, reservoir, batteries, suspension and the basal rate in force.
+// The API layer fills its device-status cache as a side effect of a history
+// fetch, so one is made first — the graph's own window, which every backend
+// serves in a single request. Only rows the backend actually reported are
+// printed; a missing figure is unknown, never zero. Plain CGM backends
+// (Dexcom Share, LibreLinkUp, xDrip) report nothing, and say so with exit 4.
+procedure RunDevice;
+var
+  st: TCGMDeviceStatus;
+  basal: TBasalStatus;
+  haveStatus, haveBasal, any: boolean;
+  fs: TFormatSettings;
+  res: string;
+begin
+  fs := DefaultFormatSettings;
+  fs.DecimalSeparator := '.';
+  FetchReadingsSafe(GRAPH_SPAN_MIN, GRAPH_MAX_READINGS);
+  if gFetchErr <> '' then
+  begin
+    writeln(stderr, 'History fetch failed: ', gFetchErr);
+    halt(3);
+  end;
+
+  haveStatus := gApi.getDeviceStatus(st);
+  // getBasalStatus may cost a request of its own (Nightscout reads the
+  // profile), and a backend without a pump answers with nothing rather than
+  // with an error — but one that throws must not take the rest down.
+  try
+    haveBasal := gApi.getBasalStatus(basal);
+  except
+    on Exception do
+      haveBasal := false;
+  end;
+  if haveBasal then
+    haveBasal := (basal.commanded >= 0) or (basal.programmed >= 0);
+
+  if not (haveStatus or haveBasal) then
+  begin
+    writeln(stderr, Format('No device status reported by %s. Nightscout v3, ' +
+      'Tandem and CareLink carry it; plain CGM backends do not.',
+      [gApi.systemName]));
+    halt(4);
+  end;
+
+  writeln(Format('Device status — %s', [gApi.systemName]));
+  any := false;
+
+  if st.sensorDurationHours >= 0 then
+  begin
+    DeviceRow('Sensor', FmtSensorLeft(st.sensorDurationHours));
+    any := true;
+  end;
+  if (st.sensorState <> '') or (not st.sensorOK) then
+  begin
+    res := st.sensorState;
+    if not st.sensorOK then
+      if res = '' then
+        res := 'fault reported'
+      else
+        res := res + '  (fault)';
+    DeviceRow('Sensor state', res);
+    any := true;
+  end;
+  if (st.reservoirUnits >= 0) or (st.reservoirPercent >= 0) then
+  begin
+    res := '';
+    if st.reservoirUnits >= 0 then
+      res := FormatFloat('0.#', st.reservoirUnits, fs) + ' U';
+    if st.reservoirPercent >= 0 then
+      if res = '' then
+        res := Format('%d%%', [st.reservoirPercent])
+      else
+        res := res + Format(' (%d%%)', [st.reservoirPercent]);
+    DeviceRow('Reservoir', res);
+    any := true;
+  end;
+  if st.pumpBatteryPercent >= 0 then
+  begin
+    DeviceRow('Pump battery', Format('%d%%', [st.pumpBatteryPercent]));
+    any := true;
+  end;
+  if st.transmitterBatteryPercent >= 0 then
+  begin
+    DeviceRow('Transmitter', Format('%d%%', [st.transmitterBatteryPercent]));
+    any := true;
+  end;
+  if st.pumpSuspended then
+  begin
+    DeviceRow('Insulin', 'delivery suspended');
+    any := true;
+  end;
+  if haveBasal then
+  begin
+    // Both rates when the backend tells them apart: a looping pump's last
+    // command and the programmed profile routinely differ, and neither is
+    // "the" basal on its own.
+    res := '';
+    if basal.commanded >= 0 then
+      res := FormatFloat('0.00', basal.commanded, fs) + ' U/h';
+    if basal.programmed >= 0 then
+      if res = '' then
+        res := FormatFloat('0.00', basal.programmed, fs) + ' U/h programmed'
+      else
+        res := res + ' commanded, ' +
+          FormatFloat('0.00', basal.programmed, fs) + ' U/h programmed';
+    if basal.time > 0 then
+      res := res + '  at ' + FormatDateTime('hh:nn', basal.time);
+    DeviceRow('Basal', res);
+    any := true;
+  end;
+  if st.statusMessage <> '' then
+  begin
+    DeviceRow('Status', st.statusMessage);
+    any := true;
+  end;
+  // The backend said it reported something, but every field it filled is
+  // one this table has no row for — say so rather than print a bare title.
+  if not any then
+    DeviceRow('Status', 'reported, but no figures');
+end;
+
+{------------------------------------------------------------------------------
   Sparkline (--spark)
  ------------------------------------------------------------------------------}
 
@@ -2363,6 +2509,8 @@ begin
     [AGP_DEFAULT_DAYS, AGP_MAX_DAYS]));
   writeln(Format('      --csv [H]    the last H hours as CSV, oldest first (default %d, max %d)',
     [CSV_DEFAULT_HOURS, CSV_MAX_HOURS]));
+  writeln('  -d, --device     sensor and pump status: sensor life, reservoir, batteries,');
+  writeln('                   basal (Nightscout v3, Tandem and CareLink report it)');
   writeln('      --predict    graph mode: start with the forecast drawn (F6 toggles)');
   writeln('  -u, --unit U     show values in U (mmol or mgdl) for this run, whatever');
   writeln('                   the settings say; the setting itself is left alone');
@@ -2416,6 +2564,7 @@ var
   checkMode: boolean = false;
   agpMode: boolean = false;
   csvMode: boolean = false;
+  deviceMode: boolean = false;
   profileMode: boolean = false;
   profileName: string = '';
   profileErr: string = '';
@@ -2503,6 +2652,8 @@ begin
           BadUsage(Format('--csv takes a number of hours between 1 and %d, got "%s".',
             [CSV_MAX_HOURS, val]));
     end;
+    '-d', '--device':
+      deviceMode := true;
     '-p', '--profile':
     begin
       profileMode := true;
@@ -2558,15 +2709,16 @@ begin
   end;
 
   if ord(graphMode) + ord(statsMode) + ord(sparkMode) + ord(agpMode) +
-    ord(csvMode) > 1 then
-    BadUsage('--graph, --stats, --spark, --agp and --csv cannot be combined.');
-  if setupMode and (graphMode or statsMode or sparkMode or agpMode or csvMode) then
-    BadUsage('--setup cannot be combined with --graph, --stats, --spark, --agp or --csv.');
+    ord(csvMode) + ord(deviceMode) > 1 then
+    BadUsage('--graph, --stats, --spark, --agp, --csv and --device cannot be combined.');
+  if setupMode and (graphMode or statsMode or sparkMode or agpMode or csvMode or
+    deviceMode) then
+    BadUsage('--setup cannot be combined with --graph, --stats, --spark, --agp, --csv or --device.');
   if checkMode and (graphMode or statsMode or sparkMode or agpMode or csvMode or
-    setupMode) then
-    BadUsage('--check cannot be combined with --graph, --stats, --spark, --agp, --csv or --setup.');
+    deviceMode or setupMode) then
+    BadUsage('--check cannot be combined with --graph, --stats, --spark, --agp, --csv, --device or --setup.');
   if profileMode and (profileName = '') and (graphMode or statsMode or
-    sparkMode or agpMode or csvMode or setupMode or checkMode) then
+    sparkMode or agpMode or csvMode or deviceMode or setupMode or checkMode) then
     BadUsage('A bare --profile lists the accounts; give it a name to ' +
       'combine with other options.');
 
@@ -2614,6 +2766,8 @@ begin
       RunAGP(agpDays)
     else if csvMode then
       RunCsv(csvHours)
+    else if deviceMode then
+      RunDevice
     else
       RunOnce(checkMode);
   finally

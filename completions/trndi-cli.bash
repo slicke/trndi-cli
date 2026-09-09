@@ -27,6 +27,6 @@ _trndi_cli()
         ;;
     esac
 
-    COMPREPLY=($(compgen -W '--check --graph --stats --spark --agp --csv --predict --unit --profile --setup --help --version' -- "$cur"))
+    COMPREPLY=($(compgen -W '--check --graph --stats --spark --agp --csv --device --predict --unit --profile --setup --help --version' -- "$cur"))
 }
 complete -F _trndi_cli trndi-cli

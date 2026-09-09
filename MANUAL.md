@@ -215,7 +215,7 @@ trndi-cli exits with a distinct code and a message on stderr:
 | `1` | No backend configured | Run `trndi-cli --setup`, or set `remote.type` as described above |
 | `2` | Unknown backend | Check `remote.type` against the table |
 | `3` | Connection failed | Message includes the backend's error — check address/credentials |
-| `4` | No recent reading | Backend reachable but silent > 24 h (with `--stats` or `--csv`: nothing in the requested window; with `--agp`: fewer than 3 days of history came back; with `--check`: also a stale fallback, so scripts never alarm on old data) — check the uploader |
+| `4` | No recent reading | Backend reachable but silent > 24 h (with `--stats` or `--csv`: nothing in the requested window; with `--agp`: fewer than 3 days of history came back; with `--check`: also a stale fallback, so scripts never alarm on old data; with `--device`: the backend reported no sensor or pump status at all) — check the uploader |
 | `5` | Above the high threshold | Only from `--check` — an answer, not an error |
 | `6` | Below the low threshold | Only from `--check` — an answer, not an error |
 | `64` | Bad command line | Unknown option, a `--stats`, `--spark`, `--agp` or `--csv` window outside its range, a `--unit` other than `mmol`/`mgdl`, a `--profile` name not in the accounts, or `--setup` without a terminal |

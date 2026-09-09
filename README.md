@@ -51,6 +51,18 @@ time,value,unit,delta,trend,level
 2026-09-09T19:53:55,7.6,mmol/L,0.2,FortyFiveUp,in-range
 ```
 
+`--device` lists what the backend knows about the hardware behind the readings — sensor life and state, reservoir, pump and transmitter batteries, whether delivery is suspended, and the basal rate in force (both the commanded and the programmed rate where a looping pump reports them). Only rows the backend actually reported are printed, since a missing figure is unknown rather than empty. Nightscout v3, Tandem Source and CareLink carry this; plain CGM backends (Dexcom Share, LibreLinkUp, xDrip) do not, and a Nightscout site fed only by a phone uploader has nothing to say either — both end with exit 4 and a line saying so:
+
+```
+$ trndi-cli --device
+Device status — CareLink
+  Sensor        3 d 6 h left (78 h)
+  Sensor state  NO_ERROR_MESSAGE
+  Reservoir     112 U (62%)
+  Pump battery  75%
+  Basal         0.85 U/h commanded, 0.90 U/h programmed  at 21:05
+```
+
 `--unit mgdl` (or `mmol`) shows one run in the other unit without touching the stored setting — for a script that feeds a mg/dL widget on a machine whose GUI shows mmol/L, say. Everything follows it: the reading line, the graph scale, the stats, the sparkline, the AGP and the CSV export.
 
 Trndi's multi-user mode carries over: on a machine following more than one person, `--profile` names which account a run reads — `-p Anna --graph` in one terminal, `-p Bertil --check` in a cron job — and a bare `--profile` lists the accounts. They are the same accounts the GUI manages, matched case-insensitively, and the graph names its account in the frame title so two windows side by side stay tellable apart. On a machine without the GUI, `--setup --profile Anna` creates the account on save.
@@ -71,6 +83,7 @@ trndi-cli --agp         time-of-day percentile profile of the last 14 days
 trndi-cli --agp 7       ... or any window from 3 to 28 days
 trndi-cli --csv         the last 24 h of readings as CSV, oldest first
 trndi-cli --csv 72      ... or any window from 1 to 168 hours
+trndi-cli --device      sensor life, reservoir, batteries and basal, where reported
 trndi-cli --unit mgdl   any mode above in mg/dL (or mmol) for this run only
 trndi-cli --profile     list the accounts of Trndi's multi-user mode
 trndi-cli -p Anna ...   any mode above against that account's settings
