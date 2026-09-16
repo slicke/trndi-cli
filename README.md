@@ -121,12 +121,13 @@ Windows (PowerShell, FPC from a [Lazarus](https://www.lazarus-ide.org/) install 
 .\make.ps1
 ```
 
-Running on Windows needs `libcurl.dll` ([curl.se/windows](https://curl.se/windows/), rename `libcurl-x64.dll`) next to the exe or in `PATH`.
+Running on Windows needs `libcurl.dll` next to the exe or in `PATH`: download the package from [curl.se/windows](https://curl.se/windows/) and rename its `libcurl-x64.dll` to `libcurl.dll`.
 
 ### Windows on ARM64
 
-Not in the published release set — build it by cross-compiling from Linux. It
-needs FPC **trunk** (3.2.2 cannot target `aarch64-win64`) and **llvm-mingw**
+A native ARM64 build ships under [Releases](https://github.com/slicke/trndi-cli/releases)
+as `trndi-cli-windows-arm64.exe`. To build it yourself, cross-compile from
+Linux: it needs FPC **trunk** (3.2.2 cannot target `aarch64-win64`) and **llvm-mingw**
 rather than binutils, because FPC assembles this target with clang and not GAS.
 The container below carries both, so nothing is installed on the host:
 
@@ -155,11 +156,11 @@ package set for the target — so cache `/tmp/fpctrunk` if you do this more than
 once.
 
 At runtime the ARM64 build needs an ARM64 `libcurl.dll`, not the x64 one: take
-`win64a-mingw` from [curl.se/windows](https://curl.se/windows/) and rename
-`libcurl-arm64.dll`. The exe imports it at load time, so without it the program
+`win64a-mingw` from [curl.se/windows](https://curl.se/windows/) and rename its
+`libcurl-arm64.dll` to `libcurl.dll`. The exe imports it at load time, so without it the program
 does not start at all rather than failing when it first makes a request.
 
-Every green build on `main` publishes binaries for Linux (x86-64, ARM64 and i686), FreeBSD, Haiku and Windows under [Releases](https://github.com/slicke/trndi-cli/releases).
+Every green build on `main` publishes binaries for Linux (x86-64, ARM64 and i686), FreeBSD, Haiku and Windows (x64 and ARM64) under [Releases](https://github.com/slicke/trndi-cli/releases).
 
 `sudo make install` puts the binary in `/usr/local/bin` together with tab completion for bash, zsh and fish (`PREFIX`/`DESTDIR` respected for packagers). The completions also work on their own: `make install-completions`, or source `completions/trndi-cli.bash` from your `.bashrc`.
 
