@@ -12,6 +12,13 @@ complete -c trndi-cli -l spark -d 'The last H hours as a sparkline (default 3, m
 complete -c trndi-cli -l agp -d 'Time-of-day glucose profile of the last D days (default 14, max 28)' -x
 complete -c trndi-cli -l csv -d 'The last H hours of readings as CSV (default 24, max 168)' -x
 complete -c trndi-cli -s d -l device -d 'Sensor and pump status: sensor life, reservoir, batteries, basal'
+complete -c trndi-cli -s w -l watch -d 'Keep running: a line per new reading (optional fixed poll in seconds, 10-3600)'
+complete -c trndi-cli -l on-reading -d 'Watch: run a command on every new reading' -x -a '(__fish_complete_command)'
+complete -c trndi-cli -l on-low -d 'Watch: run a command when the reading goes below the low threshold' -x -a '(__fish_complete_command)'
+complete -c trndi-cli -l on-high -d 'Watch: run a command when the reading goes above the high threshold' -x -a '(__fish_complete_command)'
+complete -c trndi-cli -l on-ok -d 'Watch: run a command when the reading comes back into range' -x -a '(__fish_complete_command)'
+complete -c trndi-cli -l on-stale -d 'Watch: run a command when no reading has arrived for 3 intervals' -x -a '(__fish_complete_command)'
+complete -c trndi-cli -l remind -d 'Watch: repeat --on-low/--on-high every M minutes while it lasts (default 30, 0 = entry only)' -x
 complete -c trndi-cli -l predict -d 'Graph mode: start with the forecast drawn (F6 toggles)'
 complete -c trndi-cli -s u -l unit -d 'Show values in this unit for this run only' -x -a 'mmol mgdl'
 # A bare `trndi-cli --profile` prints the accounts one per line, so the real

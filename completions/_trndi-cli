@@ -7,7 +7,7 @@
 # lists mirror the "cannot be combined" checks there: one mode per run.
 
 local -a modes
-modes=(-c --check -g --graph -s --stats --spark --agp --csv -d --device --setup)
+modes=(-c --check -g --graph -s --stats --spark --agp --csv -d --device -w --watch --setup)
 
 _arguments -s \
   "($modes)"{-c,--check}'[print the reading, with the range in the exit code: 5 high, 6 low]' \
@@ -17,6 +17,13 @@ _arguments -s \
   "($modes)--agp[time-of-day glucose profile of the last D days (default 14)]::days (3-28):" \
   "($modes)--csv[the last H hours of readings as CSV (default 24)]::hours (1-168):" \
   "($modes)"{-d,--device}'[sensor and pump status: sensor life, reservoir, batteries, basal]' \
+  "($modes)"{-w,--watch}'[keep running: a line per new reading (optional fixed poll in seconds)]::seconds (10-3600):' \
+  '--on-reading[watch: run a command on every new reading]:command:_command_names -e' \
+  '--on-low[watch: run a command when the reading goes below the low threshold]:command:_command_names -e' \
+  '--on-high[watch: run a command when the reading goes above the high threshold]:command:_command_names -e' \
+  '--on-ok[watch: run a command when the reading comes back into range]:command:_command_names -e' \
+  '--on-stale[watch: run a command when no reading has arrived for 3 intervals]:command:_command_names -e' \
+  '--remind[watch: repeat --on-low/--on-high every M minutes while it lasts (default 30, 0 = entry only)]:minutes:' \
   '--predict[graph mode: start with the forecast drawn (F6 toggles)]' \
   {-u,--unit}'[show values in this unit for this run only]:unit:(mmol mgdl)' \
   {-p,--profile}'[use this multi-user account (bare: list accounts)]::account:{compadd ${(f)"$(trndi-cli --profile 2>/dev/null)"}}' \

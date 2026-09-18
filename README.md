@@ -63,7 +63,45 @@ Device status — CareLink
   Basal         0.85 U/h commanded, 0.90 U/h programmed  at 21:05
 ```
 
-`--unit mgdl` (or `mmol`) shows one run in the other unit without touching the stored setting — for a script that feeds a mg/dL widget on a machine whose GUI shows mmol/L, say. Everything follows it: the reading line, the graph scale, the stats, the sparkline, the AGP and the CSV export.
+`--watch` keeps running: it prints one line per new reading as it arrives, in the same shape as a bare run, and runs a command when something happens — `--on-low`, `--on-high`, `--on-ok` when the reading comes back into range, `--on-stale` when readings stop arriving, `--on-reading` for every one. It is `--check` made continuous: the same thresholds and the same bands, but no cron entry and nothing to parse. The reading reaches the command as environment variables, not spliced into the command line, so a value can never break the shell:
+
+```
+$ trndi-cli --watch --on-low 'notify-send -u critical "Low: $TRNDI_VALUE $TRNDI_UNIT"' \
+                    --on-high 'notify-send "High: $TRNDI_VALUE $TRNDI_UNIT"' \
+                    --on-stale 'notify-send "No CGM data for $TRNDI_AGE min"'
+7.1 mmol/L ↘ (-0.4)  20:15
+6.6 mmol/L ↘ (-0.5)  20:20
+```
+
+| Variable | Meaning |
+|---|---|
+| `TRNDI_EVENT` | `reading`, `low`, `high`, `ok` or `stale` |
+| `TRNDI_VALUE`, `TRNDI_DELTA`, `TRNDI_UNIT` | the reading and its change in the display unit |
+| `TRNDI_MGDL`, `TRNDI_MMOL` | the reading in both units, whatever the display unit |
+| `TRNDI_LEVEL` | `low`, `range-low`, `in-range`, `range-high` or `high`, as in the CSV |
+| `TRNDI_TREND`, `TRNDI_ARROW` | the trend as a word (`FortyFiveDown`) and as an arrow |
+| `TRNDI_TIME`, `TRNDI_AGE` | the reading's local time (ISO 8601) and its age in minutes |
+| `TRNDI_LINE`, `TRNDI_PROFILE` | the line as printed, and the account the run follows |
+
+A low or a high fires on entry and then every 30 minutes while it lasts (`--remind 10` changes that, `--remind 0` fires on entry only); a stale fallback never fires one, since hours-old data should not wake anyone. Stale means no new reading for three reporting intervals, 15 minutes on a 5-minute sensor, and is announced once on the stream too. Polling follows the readings rather than a clock — one request shortly after the next reading is due, then once a minute while it is overdue — so the backend sees about one request per reading; `--watch 60` polls at a fixed cadence instead. Fetch errors are reported on stderr and retried, never fatal. The command runs through the shell and to completion before the next poll; something long-running belongs in the background with `&`. Output is flushed per line, so piping into a file, a status bar or the journal works, and a systemd user service is all it takes to follow all day:
+
+```ini
+# ~/.config/systemd/user/trndi-watch.service
+[Unit]
+Description=Trndi glucose follower
+After=network-online.target
+
+[Service]
+# systemd expands $VAR itself; $$ leaves the variable for the shell the hook runs in.
+ExecStart=/usr/local/bin/trndi-cli --watch --on-low 'notify-send -u critical "Low: $$TRNDI_VALUE"'
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=default.target
+```
+
+`--unit mgdl` (or `mmol`) shows one run in the other unit without touching the stored setting — for a script that feeds a mg/dL widget on a machine whose GUI shows mmol/L, say. Everything follows it: the reading line, the graph scale, the stats, the sparkline, the AGP, the CSV export and the watch stream.
 
 Trndi's multi-user mode carries over: on a machine following more than one person, `--profile` names which account a run reads — `-p Anna --graph` in one terminal, `-p Bertil --check` in a cron job — and a bare `--profile` lists the accounts. They are the same accounts the GUI manages, matched case-insensitively, and the graph names its account in the frame title so two windows side by side stay tellable apart. On a machine without the GUI, `--setup --profile Anna` creates the account on save.
 
@@ -84,6 +122,9 @@ trndi-cli --agp 7       ... or any window from 3 to 28 days
 trndi-cli --csv         the last 24 h of readings as CSV, oldest first
 trndi-cli --csv 72      ... or any window from 1 to 168 hours
 trndi-cli --device      sensor life, reservoir, batteries and basal, where reported
+trndi-cli --watch       keep running: a line per new reading, --on-low/--on-high/
+                        --on-ok/--on-stale/--on-reading CMD run a shell command
+trndi-cli --watch 60    ... polled every 60 s instead of just after each is due
 trndi-cli --unit mgdl   any mode above in mg/dL (or mmol) for this run only
 trndi-cli --profile     list the accounts of Trndi's multi-user mode
 trndi-cli -p Anna ...   any mode above against that account's settings
@@ -97,6 +138,8 @@ Exit codes: `0` OK · `1` not configured · `2` unknown backend · `3` connectio
 ```bash
 trndi-cli --check >/dev/null; [ $? -eq 6 ] && notify-send -u critical "Low glucose"
 ```
+
+`--watch` does the same without the cron entry, and only fires when the band changes rather than every five minutes a low lasts.
 
 ## Building
 

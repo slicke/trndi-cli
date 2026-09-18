@@ -48,7 +48,9 @@
   an Ambulatory Glucose Profile. With --csv the readings of a period come
   out as CSV for a spreadsheet or a script. With --device the backend's
   sensor and pump housekeeping is listed. With --check the exit code
-  carries where the reading sits: 0 in range, 5 high, 6 low.
+  carries where the reading sits: 0 in range, 5 high, 6 low. With --watch
+  it keeps running, printing each new reading as it arrives and running
+  --on-low, --on-high, --on-ok, --on-stale and --on-reading commands.
 
   Settings are read from the GUI's config (~/.config/Trndi.cfg on Linux), so
   a machine with a configured Trndi needs no setup. With --profile every mode
@@ -72,6 +74,7 @@ Windows,
 {$ELSE}
 termio, // IsATTY, for deciding whether the sparkline gets colors
 {$ENDIF}
+Classes, Process, // TProcess runs the --watch hooks with their own environment
 App, Objects, Drivers, Views, Menus, FVConsts, Video,
 trndi.native, trndi.native.console,
 trndi.api, trndi.api.registry, trndi.types, trndi.funcs.core,
@@ -1855,16 +1858,18 @@ const
 
 // A number the way every CSV reader expects one: a period as the decimal
 // point whatever the locale, one decimal for mmol/L, none for mg/dL.
-function CsvNum(v: double): string;
-var
-  fs: TFormatSettings;
+function DotSettings: TFormatSettings;
 begin
-  fs := DefaultFormatSettings;
-  fs.DecimalSeparator := '.';
+  Result := DefaultFormatSettings;
+  Result.DecimalSeparator := '.';
+end;
+
+function CsvNum(v: double): string;
+begin
   if gUnit = mmol then
-    Result := FormatFloat('0.0', v, fs)
+    Result := FormatFloat('0.0', v, DotSettings)
   else
-    Result := FormatFloat('0', v, fs);
+    Result := FormatFloat('0', v, DotSettings);
 end;
 
 // The last `hours` hours of readings as CSV on stdout, oldest first: one
@@ -2426,6 +2431,283 @@ begin
     writeln('Settings unchanged.');
 end;
 
+{------------------------------------------------------------------------------
+  Watch mode (--watch)
+ ------------------------------------------------------------------------------}
+
+// A long-running follower: one line per new reading, and a command per event
+// for the things a script wants to react to — a low, a high, the return to
+// range, readings going quiet. It is --check made continuous: the same
+// thresholds, the same bands, but no cron entry and no parsing.
+
+const
+  // The poll rides the readings rather than a clock: after a reading at T
+  // the next is due at T + interval, so ask a little after that, and then
+  // once a minute while it is overdue. Two requests per reading in the
+  // common case, none wasted in between — LibreLinkUp and Dexcom Share
+  // dislike being hammered, and a fixed one-minute poll would be five times
+  // the traffic for the same latency.
+  WATCH_GRACE_S = 20;
+  WATCH_RETRY_S = 60;
+  // --watch S overrides that with a fixed cadence. Below 10 s is abuse of
+  // the backend; above an hour the follower cannot follow.
+  WATCH_MIN_POLL_S = 10;
+  WATCH_MAX_POLL_S = 3600;
+  // No new reading for this many reporting intervals and the follower says
+  // so and fires --on-stale: a sensor warm-up, a phone out of range, a site
+  // that stopped answering. 15 minutes at the 5-minute cadence, which is
+  // when a person would start wondering too.
+  WATCH_STALE_INTERVALS = 3;
+  // While a low or high persists, its command fires again this often.
+  // Zero means only on entry.
+  WATCH_DEFAULT_REMIND_MIN = 30;
+  // Sleep in short slices so a laptop back from suspend polls promptly
+  // rather than finishing a sleep that started an hour of wall time ago.
+  WATCH_SLICE_MS = 1000;
+
+type
+  TWatchEvent = (weReading, weLow, weHigh, weOK, weStale);
+
+const
+  WATCH_EVENT_NAMES: array[TWatchEvent] of string =
+    ('reading', 'low', 'high', 'ok', 'stale');
+  WATCH_EVENT_FLAGS: array[TWatchEvent] of string =
+    ('--on-reading', '--on-low', '--on-high', '--on-ok', '--on-stale');
+
+var
+  gWatchHooks: array[TWatchEvent] of string;   // '' = nothing to run
+  gWatchPollS: integer = 0;                     // 0 = follow the readings
+  gWatchRemindMin: integer = WATCH_DEFAULT_REMIND_MIN;
+
+// The reading and its context as TRNDI_* variables, so a hook is a plain
+// shell command that reads its environment. Values go in the environment
+// rather than into the command line on purpose: a delta or an error message
+// spliced into a shell string would be an injection waiting to happen, and
+// "$TRNDI_VALUE" needs no quoting rules to get right.
+procedure HookEnvironment(env: TStrings; event: TWatchEvent);
+var
+  i: integer;
+  v: string;
+begin
+  // Start from the inherited environment, minus any TRNDI_* left by a
+  // parent, so a stale TRNDI_LEVEL cannot leak into a hook that did not get
+  // one of its own. GetEnvironmentString counts from 1.
+  for i := 1 to GetEnvironmentVariableCount do
+  begin
+    v := GetEnvironmentString(i);
+    if Copy(v, 1, 6) <> 'TRNDI_' then
+      env.Add(v);
+  end;
+  env.Add('TRNDI_EVENT=' + WATCH_EVENT_NAMES[event]);
+  env.Add('TRNDI_UNIT=' + BG_UNIT_NAMES[gUnit]);
+  if ActiveProfileName <> '' then
+    env.Add('TRNDI_PROFILE=' + ActiveProfileName)
+  else
+    env.Add('TRNDI_PROFILE=default');
+  if not gHaveCurrent then
+    exit;
+  env.Add('TRNDI_VALUE=' + CsvNum(gCurrent.convert(gUnit)));
+  env.Add('TRNDI_MGDL=' + IntToStr(round(gCurrent.convert(mgdl))));
+  env.Add('TRNDI_MMOL=' + FormatFloat('0.0', gCurrent.convert(mmol),
+    DotSettings));
+  if not gCurrent.deltaEmpty then
+    env.Add('TRNDI_DELTA=' + CsvNum(gCurrent.convert(gUnit, BGDelta)))
+  else
+    env.Add('TRNDI_DELTA=');
+  env.Add('TRNDI_TREND=' + CSV_TREND_NAMES[gCurrent.trend]);
+  env.Add('TRNDI_ARROW=' + BG_TREND_ARROWS_UTF[gCurrent.trend]);
+  env.Add('TRNDI_LEVEL=' + CSV_LEVEL_NAMES[gApi.getLevel(gCurrent.convert(mgdl))]);
+  env.Add('TRNDI_TIME=' + FormatDateTime('yyyy-mm-dd"T"hh:nn:ss', gCurrent.date));
+  env.Add('TRNDI_AGE=' + IntToStr(MinutesBetween(Now, gCurrent.date)));
+  env.Add('TRNDI_LINE=' + CurrentLine);
+end;
+
+// Run one hook to completion through the user's shell — /bin/sh -c on Unix,
+// %COMSPEC% /c on Windows — with the TRNDI_* variables set. Synchronous on
+// purpose: the next poll is minutes away and a notify-send returns at once.
+// A hook that should outlive the call (a sound, a long HTTP retry) can
+// background itself with & as any shell command does. A hook's failure is
+// reported and shrugged off; the follower's job is to keep following.
+procedure RunHook(event: TWatchEvent);
+var
+  p: TProcess;
+  cmd: string;
+begin
+  cmd := gWatchHooks[event];
+  if cmd = '' then
+    exit;
+  p := TProcess.Create(nil);
+  try
+    try
+{$IFDEF WINDOWS}
+      p.Executable := SysUtils.GetEnvironmentVariable('COMSPEC');
+      if p.Executable = '' then
+        p.Executable := 'cmd.exe';
+      p.Parameters.Add('/c');
+{$ELSE}
+      p.Executable := '/bin/sh';
+      p.Parameters.Add('-c');
+{$ENDIF}
+      p.Parameters.Add(cmd);
+      HookEnvironment(p.Environment, event);
+      p.Options := [poWaitOnExit];
+      p.Execute;
+      if p.ExitStatus <> 0 then
+        writeln(stderr, Format('%s: exit %d', [WATCH_EVENT_FLAGS[event],
+          p.ExitStatus]));
+    except
+      on E: Exception do
+        writeln(stderr, Format('%s: %s', [WATCH_EVENT_FLAGS[event], E.Message]));
+    end;
+  finally
+    p.Free;
+  end;
+end;
+
+// The band --check would report for the current reading, folded to the
+// three the hooks distinguish: the personal-limit sublevels count as in
+// range, as they do for the exit codes.
+function WatchBand: TWatchEvent;
+begin
+  case gApi.getLevel(gCurrent.convert(mgdl)) of
+  BGHigh:
+    Result := weHigh;
+  BGLOW:
+    Result := weLow;
+  else
+    Result := weOK;
+  end;
+end;
+
+// Sleep until `deadline` in slices, recomputing against the clock each time:
+// a machine that suspended mid-sleep wakes to find the deadline long past
+// and polls at once, rather than sleeping out the remainder first.
+procedure SleepUntil(deadline: TDateTime);
+var
+  remaining: int64;
+begin
+  repeat
+    remaining := MilliSecondsBetween(Now, deadline);
+    if Now >= deadline then
+      break;
+    if remaining > WATCH_SLICE_MS then
+      remaining := WATCH_SLICE_MS;
+    Sleep(remaining);
+  until false;
+end;
+
+// Follow the backend until interrupted. Prints a line per new reading — the
+// same line as a bare run, colored by band on a terminal, flushed at once
+// so a pipe or a journal sees it live — and runs the hooks:
+//
+//   --on-reading  every new reading
+//   --on-low      the reading enters the low band; again every --remind
+//                 minutes while it stays there
+//   --on-high     the same for the high band
+//   --on-ok       the reading comes back into range after a low or a high
+//   --on-stale    no new reading for WATCH_STALE_INTERVALS intervals, once;
+//                 the next reading to arrive is announced as usual
+//
+// Fetch errors are reported on stderr and retried, never fatal: a follower
+// that dies on the first dropped connection is not one. Only the initial
+// connect keeps the one-shot exit codes, since that is configuration.
+procedure RunWatch;
+var
+  interval, staleMin: integer;
+  lastSeen: TDateTime;        // timestamp of the last reading printed
+  lastBand: TWatchEvent;      // band that reading was in
+  lastAlarm: TDateTime;       // when --on-low/--on-high last fired
+  haveLast, staleSaid, color: boolean;
+  band: TWatchEvent;
+  deadline: TDateTime;
+begin
+  interval := gApi.getReportingInterval;
+  if interval < 1 then
+    interval := 5;
+  staleMin := interval * WATCH_STALE_INTERVALS;
+  color := StdoutSupportsColor;
+  haveLast := false;
+  staleSaid := false;
+  lastSeen := 0;
+  lastBand := weOK;
+  lastAlarm := 0;
+
+  repeat
+    FetchCurrent;
+    if not gHaveCurrent then
+    begin
+      // Nothing at all from the backend. Say why once per failure, but only
+      // on stderr: stdout stays one line per reading for whatever consumes it.
+      if gCurrentErr <> '' then
+        writeln(stderr, FormatDateTime('hh:nn', Now), '  fetch failed: ', gCurrentErr)
+      else if not haveLast then
+        writeln(stderr, FormatDateTime('hh:nn', Now), '  no reading available');
+    end
+    else if (not haveLast) or (gCurrent.date > lastSeen) then
+    begin
+      // A reading newer than the last one printed: announce it. A stale
+      // fallback on the very first fetch is printed too — the follower
+      // should say what it found — but marked, as a bare run marks it.
+      if color then
+        writeln(LevelSGR(gApi.getLevel(gCurrent.convert(mgdl))), CurrentLine,
+          #27'[0m')
+      else
+        writeln(CurrentLine);
+      Flush(output);
+      lastSeen := gCurrent.date;
+      staleSaid := false;
+      RunHook(weReading);
+      band := WatchBand;
+      // Band transitions drive the alarms. A stale fallback is not a fresh
+      // event: hours-old data should not wake anyone, as with --check.
+      if not gStale then
+      begin
+        if band <> weOK then
+        begin
+          if (band <> lastBand) or ((gWatchRemindMin > 0) and
+            (MinutesBetween(Now, lastAlarm) >= gWatchRemindMin)) then
+          begin
+            RunHook(band);
+            lastAlarm := Now;
+          end;
+        end
+        else if haveLast and (lastBand <> weOK) then
+          RunHook(weOK);
+        lastBand := band;
+      end;
+      haveLast := true;
+    end;
+
+    // Quiet for too long: say so once, on stdout since it is a state change
+    // the reader of the stream wants to see, and fire the hook once.
+    if haveLast and (not staleSaid) and
+      (MinutesBetween(Now, lastSeen) >= staleMin) then
+    begin
+      writeln(Format('%s  [stale: no reading for %d min]',
+        [FormatDateTime('hh:nn', Now), MinutesBetween(Now, lastSeen)]));
+      Flush(output);
+      staleSaid := true;
+      RunHook(weStale);
+    end;
+
+    // When to ask again: a fixed cadence if one was given; otherwise just
+    // after the next reading is due, or a minute from now once it is overdue
+    // (or nothing has arrived yet to phase-lock to).
+    if gWatchPollS > 0 then
+      deadline := IncSecond(Now, gWatchPollS)
+    else
+    begin
+      if haveLast then
+        deadline := IncSecond(IncMinute(lastSeen, interval), WATCH_GRACE_S)
+      else
+        deadline := 0;
+      if deadline <= IncSecond(Now, WATCH_MIN_POLL_S) then
+        deadline := IncSecond(Now, WATCH_RETRY_S);
+    end;
+    SleepUntil(deadline);
+  until false;
+end;
+
 // The one-shot print. With check the exit code carries where the reading
 // sits — 0 in range, 5 above the high threshold, 6 below the low one — so a
 // script can alarm without parsing the line. The bands match the graph
@@ -2511,6 +2793,19 @@ begin
     [CSV_DEFAULT_HOURS, CSV_MAX_HOURS]));
   writeln('  -d, --device     sensor and pump status: sensor life, reservoir, batteries,');
   writeln('                   basal (Nightscout v3, Tandem and CareLink report it)');
+  writeln('  -w, --watch [S]  keep running: a line per new reading, polled just after');
+  writeln(Format('                   each is due, or every S seconds (%d-%d)',
+    [WATCH_MIN_POLL_S, WATCH_MAX_POLL_S]));
+  writeln('      --on-reading CMD  watch: run CMD on every new reading');
+  writeln('      --on-low CMD      ... when the reading goes below the low threshold');
+  writeln('      --on-high CMD     ... when it goes above the high threshold');
+  writeln('      --on-ok CMD       ... when it comes back into range');
+  writeln('      --on-stale CMD    ... when no reading has arrived for 3 intervals');
+  writeln(Format('      --remind M   repeat --on-low/--on-high every M minutes while it lasts',
+    []));
+  writeln(Format('                   (default %d; 0 fires only on entry). CMD runs in the',
+    [WATCH_DEFAULT_REMIND_MIN]));
+  writeln('                   shell with TRNDI_VALUE, TRNDI_LEVEL, TRNDI_EVENT... set');
   writeln('      --predict    graph mode: start with the forecast drawn (F6 toggles)');
   writeln('  -u, --unit U     show values in U (mmol or mgdl) for this run, whatever');
   writeln('                   the settings say; the setting itself is left alone');
@@ -2557,6 +2852,9 @@ var
   i: integer;
   arg, val: string;
   eq: SizeInt;
+  ev: TWatchEvent;
+  hooksGiven: boolean = false;
+  remindGiven: boolean = false;
   graphMode: boolean = false;
   statsMode: boolean = false;
   sparkMode: boolean = false;
@@ -2565,6 +2863,7 @@ var
   agpMode: boolean = false;
   csvMode: boolean = false;
   deviceMode: boolean = false;
+  watchMode: boolean = false;
   profileMode: boolean = false;
   profileName: string = '';
   profileErr: string = '';
@@ -2654,6 +2953,52 @@ begin
     end;
     '-d', '--device':
       deviceMode := true;
+    '-w', '--watch':
+    begin
+      watchMode := true;
+      // "--watch 60", "--watch=60" or bare, which follows the readings'
+      // own cadence instead of a fixed one.
+      if (val = '') and (i < ParamCount) and IsNumeric(ParamStr(i + 1)) then
+      begin
+        val := ParamStr(i + 1);
+        Inc(i);
+      end;
+      if val <> '' then
+        if (not IsNumeric(val)) or (not TryStrToInt(val, gWatchPollS)) or
+          (gWatchPollS < WATCH_MIN_POLL_S) or (gWatchPollS > WATCH_MAX_POLL_S) then
+          BadUsage(Format('--watch takes a number of seconds between %d and %d, got "%s".',
+            [WATCH_MIN_POLL_S, WATCH_MAX_POLL_S, val]));
+    end;
+    '--on-reading', '--on-low', '--on-high', '--on-ok', '--on-stale':
+    begin
+      // The command is required, so the next argument is taken whatever it
+      // looks like: "--on-low 'notify-send Low'" or "--on-low=...". Which
+      // hook it is comes from the flag's position in the name table.
+      if (val = '') and (i < ParamCount) then
+      begin
+        val := ParamStr(i + 1);
+        Inc(i);
+      end;
+      if Trim(val) = '' then
+        BadUsage(arg + ' takes a command to run.');
+      for ev := Low(TWatchEvent) to High(TWatchEvent) do
+        if WATCH_EVENT_FLAGS[ev] = arg then
+          gWatchHooks[ev] := val;
+      hooksGiven := true;
+    end;
+    '--remind':
+    begin
+      if (val = '') and (i < ParamCount) then
+      begin
+        val := ParamStr(i + 1);
+        Inc(i);
+      end;
+      if (not IsNumeric(val)) or (not TryStrToInt(val, gWatchRemindMin)) or
+        (gWatchRemindMin > MinsPerDay) then
+        BadUsage(Format('--remind takes a number of minutes from 0 to %d, got "%s".',
+          [MinsPerDay, val]));
+      remindGiven := true;
+    end;
     '-p', '--profile':
     begin
       profileMode := true;
@@ -2709,16 +3054,19 @@ begin
   end;
 
   if ord(graphMode) + ord(statsMode) + ord(sparkMode) + ord(agpMode) +
-    ord(csvMode) + ord(deviceMode) > 1 then
-    BadUsage('--graph, --stats, --spark, --agp, --csv and --device cannot be combined.');
+    ord(csvMode) + ord(deviceMode) + ord(watchMode) > 1 then
+    BadUsage('--graph, --stats, --spark, --agp, --csv, --device and --watch cannot be combined.');
   if setupMode and (graphMode or statsMode or sparkMode or agpMode or csvMode or
-    deviceMode) then
-    BadUsage('--setup cannot be combined with --graph, --stats, --spark, --agp, --csv or --device.');
+    deviceMode or watchMode) then
+    BadUsage('--setup cannot be combined with --graph, --stats, --spark, --agp, --csv, --device or --watch.');
   if checkMode and (graphMode or statsMode or sparkMode or agpMode or csvMode or
-    deviceMode or setupMode) then
-    BadUsage('--check cannot be combined with --graph, --stats, --spark, --agp, --csv, --device or --setup.');
+    deviceMode or watchMode or setupMode) then
+    BadUsage('--check cannot be combined with --graph, --stats, --spark, --agp, --csv, --device, --watch or --setup.');
+  if (hooksGiven or remindGiven) and not watchMode then
+    BadUsage('--on-reading, --on-low, --on-high, --on-ok, --on-stale and --remind need --watch.');
   if profileMode and (profileName = '') and (graphMode or statsMode or
-    sparkMode or agpMode or csvMode or deviceMode or setupMode or checkMode) then
+    sparkMode or agpMode or csvMode or deviceMode or watchMode or setupMode or
+    checkMode) then
     BadUsage('A bare --profile lists the accounts; give it a name to ' +
       'combine with other options.');
 
@@ -2768,6 +3116,8 @@ begin
       RunCsv(csvHours)
     else if deviceMode then
       RunDevice
+    else if watchMode then
+      RunWatch
     else
       RunOnce(checkMode);
   finally
