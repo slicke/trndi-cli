@@ -3,9 +3,8 @@
 #   .\make.ps1 debug     debug build (-g -gl -gh)
 #   .\make.ps1 clean     remove build artifacts
 #
-# Note: the console native's HTTP transport is libcurl, so running
-# bin\trndi-cli.exe needs libcurl.dll in PATH or next to the exe
-# (https://curl.se/windows/).
+# The console native's HTTP transport on Windows is WinHTTP (system DLL), so
+# bin\trndi-cli.exe runs without any extra DLL beside it.
 
 param([string]$Target = 'release')
 
@@ -25,7 +24,7 @@ $T = 'vendor/trndi'
 $flags = @(
     '-Mobjfpc', '-Sh', '-dX_CONSOLE', '-dWITHTHREADS',
     "-Fu$T/units/trndi", "-Fu$T/units/trndi/api",
-    "-Fu$T/units/slicke", "-Fu$T/units/misc",
+    "-Fu$T/units/slicke", "-Fu$T/units/misc", "-Fu$T/units/misc/winutils",
     "-Fi$T/inc", '-Filib', '-FUlib', '-FEbin', '-otrndi-cli.exe'
 )
 

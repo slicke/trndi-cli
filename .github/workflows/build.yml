@@ -235,18 +235,11 @@ jobs:
         shell: pwsh
         run: .\make.ps1
 
-      # The exe imports libcurl.dll at load time (console-native HTTP
-      # transport), so the smoke test needs it beside the binary. The official
-      # curl-for-Windows package names it libcurl-x64.dll; the import table
-      # wants libcurl.dll, hence the rename.
+      # HTTP on Windows goes through WinHTTP (a system DLL), so the exe runs
+      # as built: a missing-DLL dialog here would mean a transport regression.
       - name: Smoke test
         shell: pwsh
         run: |
-          curl.exe -L --fail -o curlpkg.zip 'https://curl.se/windows/latest.cgi?p=win64-mingw.zip'
-          Expand-Archive curlpkg.zip -DestinationPath curlpkg
-          $dll = Get-ChildItem curlpkg -Recurse -Filter libcurl-x64.dll | Select-Object -First 1
-          if (-not $dll) { throw 'libcurl-x64.dll not found in curl package' }
-          Copy-Item $dll.FullName bin\libcurl.dll
           .\bin\trndi-cli.exe --help
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # No settings in CI: the unconfigured case must exit 1, not crash.
@@ -301,5 +294,5 @@ jobs:
           # landed, since the API refuses non-head SHAs for the token.
           gh release create "build-${NUM}" \
             --title "Build ${NUM}" \
-            --notes "Automated build of ${GITHUB_SHA}. Setup: see MANUAL.md — Windows also needs libcurl.dll (README)." \
+            --notes "Automated build of ${GITHUB_SHA}. Setup: see MANUAL.md." \
             dist/*/*

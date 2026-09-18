@@ -133,7 +133,7 @@ reg add HKCU\SOFTWARE\Trndi /v remote.creds  /t REG_SZ /d my-api-secret
 reg add HKCU\SOFTWARE\Trndi /v unit          /t REG_SZ /d mmol
 ```
 
-trndi-cli's HTTP transport on Windows is libcurl, so `libcurl.dll` must be in `PATH` or next to `trndi-cli.exe`. Download the official [curl for Windows](https://curl.se/windows/) package and rename its `bin\libcurl-x64.dll` to `libcurl.dll`. Without it the exe does not start at all (Windows reports a missing DLL before any trndi-cli code runs).
+trndi-cli's HTTP transport on Windows is WinHTTP, the system's own stack and the one the Trndi GUI uses, so the exe needs no extra DLLs. It follows the Windows proxy configuration unless `proxy.host` is set in the registry, in which case that proxy is used exclusively, exactly as in the GUI.
 
 ## Backends
 
@@ -240,7 +240,7 @@ Trndi core build-247
 FPC 3.2.2 for Linux/x86_64, built 2026-09-08 18:28:33
 ```
 
-**Windows: "libcurl.dll was not found"** — this pops up before trndi-cli even runs; see the note under [Windows](#windows).
+**Windows: "libcurl.dll was not found"** — an exe from a build before Trndi 20 (September 2026) needed libcurl; current builds use WinHTTP and run on their own, so update the exe.
 
 A reading older than ~10 minutes is still printed, marked `[stale, N min old]`.
 

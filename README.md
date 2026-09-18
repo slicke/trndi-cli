@@ -121,7 +121,7 @@ Windows (PowerShell, FPC from a [Lazarus](https://www.lazarus-ide.org/) install 
 .\make.ps1
 ```
 
-Running on Windows needs `libcurl.dll` next to the exe or in `PATH`: download the package from [curl.se/windows](https://curl.se/windows/) and rename its `libcurl-x64.dll` to `libcurl.dll`.
+On Windows the HTTP transport is the system's own WinHTTP, the same one the Trndi GUI uses, so the exe runs on its own: no `libcurl.dll` or any other DLL to download.
 
 ### Windows on ARM64
 
@@ -154,11 +154,6 @@ podman run --rm -v "$PWD:/src:Z" -w /src docker.io/mstorsjo/llvm-mingw:latest sh
 Building the cross compiler is the slow part — it compiles the RTL and the full
 package set for the target — so cache `/tmp/fpctrunk` if you do this more than
 once.
-
-At runtime the ARM64 build needs an ARM64 `libcurl.dll`, not the x64 one: take
-`win64a-mingw` from [curl.se/windows](https://curl.se/windows/) and rename its
-`libcurl-arm64.dll` to `libcurl.dll`. The exe imports it at load time, so without it the program
-does not start at all rather than failing when it first makes a request.
 
 Every green build on `main` publishes binaries for Linux (x86-64, ARM64 and i686), FreeBSD, Haiku and Windows (x64 and ARM64) under [Releases](https://github.com/slicke/trndi-cli/releases).
 

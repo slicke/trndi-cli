@@ -16,6 +16,7 @@ CLI_DESC := $(shell git describe --tags --always --dirty 2>/dev/null || echo unk
 TRNDI_DESC := $(shell git -C $(T) describe --tags --always 2>/dev/null || echo unknown)
 
 UNITDIRS := -Fu$(T)/units/trndi -Fu$(T)/units/trndi/api \
+            -Fu$(T)/units/misc/winutils \
             -Fu$(T)/units/slicke -Fu$(T)/units/misc
 FPCFLAGS := -Mobjfpc -Sh -dX_CONSOLE -dWITHTHREADS $(UNITDIRS) -Fi$(T)/inc \
             -Filib -FUlib -FEbin -otrndi-cli $(FPCEXTRA)
