@@ -732,6 +732,7 @@ type
 
   TTrndiTui = object(TApplication)
     constructor Init;
+    procedure InitMenuBar; virtual;
     procedure InitStatusLine; virtual;
     procedure HandleEvent(var Event: TEvent); virtual;
     procedure Idle; virtual;
@@ -1334,6 +1335,11 @@ begin
   // The window fills the desktop and has to keep doing so when the terminal
   // changes size under it (see TTrndiTui.Idle).
   GrowMode := gfGrowHiX + gfGrowHiY;
+  // TWindow's defaults let the mouse close, drag, zoom and resize the frame.
+  // There is one window and GraphWin points at it: a click on the close
+  // button would free it and leave the next poll redrawing freed memory,
+  // and a drag would carry the graph off the screen.
+  Flags := 0;
   GetExtent(IR);
   IR.Grow(-1, -1);
   gv := New(PBGGraphView, Init(IR));
@@ -1391,6 +1397,12 @@ begin
   MoveStr(B[Length(hi) + 2], lo, norm);
   MoveStr(B[Length(hi) + 5], Copy(lo, 4, MaxInt), (norm and $F0) or $01);
   WriteLine(at, 0, w, 1, B);
+end;
+
+// No menu: TProgram's default is an empty bar that costs the plot a row.
+procedure TTrndiTui.InitMenuBar;
+begin
+  MenuBar := nil;
 end;
 
 procedure TTrndiTui.InitStatusLine;
@@ -1469,7 +1481,11 @@ begin
       FetchAgp(gAgpDaysReq);
     end
     else
+    begin
+      gStatus := 'fetching...';
+      ShowFetching;
       FetchAll;
+    end;
     if GraphWin <> nil then
       GraphWin^.Redraw;
     ClearEvent(Event);
@@ -1635,6 +1651,10 @@ begin
   end;
   if GetTickCount64 - gLastFetch >= POLL_INTERVAL_MS then
   begin
+    // Say so before the wait: the fetch blocks the event loop, and a header
+    // that still reads "updated" while the keys go dead looks like a hang.
+    gStatus := 'fetching...';
+    ShowFetching;
     FetchAll;
     if GraphWin <> nil then
       GraphWin^.Redraw;
