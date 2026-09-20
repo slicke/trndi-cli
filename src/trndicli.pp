@@ -86,6 +86,10 @@ const
   cmSetup = 1002;                     // ... and for F9/settings window
   cmAGP = 1003;                       // ... and for F7/AGP view toggle
   POLL_INTERVAL_MS = 5 * 60 * 1000;   // graph mode refetch cadence
+  // No new reading for this many reporting intervals and the data is old
+  // enough to say so: 15 minutes at the 5-minute cadence, which is when a
+  // person would start wondering too. The graph header and --watch agree.
+  STALE_INTERVALS = 3;
   // Fetch more than any reasonable terminal is wide (one column per
   // reporting interval); Draw shows the newest slots that fit the window.
   GRAPH_SPAN_MIN = 480;               // minutes of history in the graph
@@ -119,6 +123,7 @@ const
   // the Video unit maps them to Unicode.
   attrText = $0F;     // white on black
   attrLabel = $07;    // gray on black
+  attrWarn = $06;     // yellow on black: the header when the data is old
   chFull = #219;      // CP437 full block
   chHalf = #220;      // CP437 lower half block
   // The forecast reuses the bar geometry but a lighter texture, so it reads as
@@ -819,6 +824,43 @@ begin
     loV := Disp(gApi.cgmRangeLo);
 end;
 
+// The hard limits in display units, 0 when none are set (the API's
+// placeholder pair, as LimitTexts reads it). Both plots take them into
+// their scale: the graph then keeps its height between refreshes instead
+// of stretching a quiet hour into a mountain range, and the lines drawn at
+// them stay on screen.
+procedure LimitBounds(out hiV, loV: double);
+var
+  hi, lo: string;
+begin
+  hiV := 0;
+  loV := 0;
+  if not LimitTexts(hi, lo) then
+    exit;
+  if gUnit = mmol then
+  begin
+    hiV := gApi.cgmHi * TrndiAPI.toMMOL;
+    loV := gApi.cgmLo * TrndiAPI.toMMOL;
+  end
+  else
+  begin
+    hiV := gApi.cgmHi;
+    loV := gApi.cgmLo;
+  end;
+end;
+
+// Widen a data range to take the limits in, before padding.
+procedure IncludeLimits(var minV, maxV: double);
+var
+  hiV, loV: double;
+begin
+  LimitBounds(hiV, loV);
+  if hiV > maxV then
+    maxV := hiV;
+  if (loV > 0) and (loV < minV) then
+    minV := loV;
+end;
+
 // The AGP view: every fetched day folded onto one 24-hour axis. Per
 // time-of-day column the median is drawn solid, the 25-75% band in medium
 // shade and the 5-95% band in light shade — the forecast's "shade means
@@ -831,7 +873,7 @@ var
   B: TDrawBuffer;
   y, x, bk, gh, plotW, h: integer;
   minV, maxV, pad, v, step, band, rowTop, rowBot, tick, midMgdl: double;
-  rangeHiV, rangeLoV: double;
+  rangeHiV, rangeLoV, limHiV, limLoV: double;
   isTick, any: boolean;
   lbl: string;
   attr: byte;
@@ -848,7 +890,7 @@ var
   // A gridline where a personal range bound falls in the current row's band,
   // as the bar graph draws it. Where a band crosses one of these is the
   // pattern this view exists to show, so the line earns its place here.
-  procedure RangeLine(value: double);
+  procedure RangeLine(value: double; lineAttr: byte);
   var
     col: integer;
   begin
@@ -856,12 +898,12 @@ var
       exit;
     if not isTick then
       if gUnit = mmol then
-        MoveStr(B, Format('%6.1f', [value]), LevelAttr(BGRange))
+        MoveStr(B, Format('%6.1f', [value]), lineAttr)
       else
-        MoveStr(B, Format('%6.0f', [value]), LevelAttr(BGRange));
-    MoveChar(B[MARGIN - 1], '+', LevelAttr(BGRange), 1);
+        MoveStr(B, Format('%6.0f', [value]), lineAttr);
+    MoveChar(B[MARGIN - 1], '+', lineAttr, 1);
     for col := 0 to plotW - 1 do
-      MoveChar(B[MARGIN + col], #250, LevelAttr(BGRange), 1);
+      MoveChar(B[MARGIN + col], #250, lineAttr, 1);
   end;
 
 begin
@@ -941,10 +983,12 @@ begin
     pad := 6;
     step := 50;  // ... and every 50 mg/dL
   end;
+  IncludeLimits(minV, maxV);
   minV := minV - pad;
   maxV := maxV + pad;
   band := (maxV - minV) / gh;
   RangeBounds(rangeHiV, rangeLoV);
+  LimitBounds(limHiV, limLoV);
 
   for y := 1 to Size.Y - 2 do
   begin
@@ -984,9 +1028,12 @@ begin
         MoveChar(B[MARGIN + x], #250, attrLabel, 1);
     end;
 
-    // ... and where the personal range ends, over the legend's own line.
-    RangeLine(rangeHiV);
-    RangeLine(rangeLoV);
+    // ... the limits in the colors they switch the bands to, and where the
+    // personal range ends, over the legend's own line.
+    RangeLine(limHiV, LevelAttr(BGHigh));
+    RangeLine(limLoV, LevelAttr(BGLOW));
+    RangeLine(rangeHiV, LevelAttr(BGRange));
+    RangeLine(rangeLoV, LevelAttr(BGRange));
 
     // Bands: whole-cell resolution — these are vertical ranges, not bar
     // tops, so the half-block trick does not apply. The cursor's bucket
@@ -1053,15 +1100,17 @@ var
   // Column -> index into gReadings, -1 where no reading fell in that slot.
   colIdx: array of integer;
   minV, maxV, pad, v, step, band, rowTop, tick: double;
-  rangeHiV, rangeLoV: double;
-  isTick: boolean;
+  rangeHiV, rangeLoV, limHiV, limLoV: double;
+  isTick, warn: boolean;
   lbl: string;
-  attr: byte;
+  attr, hdrAttr: byte;
 
-  // A gridline where a personal range bound falls in the current row's band.
-  // Drawn before the bars, like the legend's own, so a bar always wins the
-  // cell; in the in-range color, since the pair is what "in range" means.
-  procedure RangeLine(value: double);
+  // A gridline where a threshold falls in the current row's band. Drawn
+  // before the bars, like the legend's own, so a bar always wins the cell;
+  // in the color of the level the line leads into: red for the high limit,
+  // blue for the low one, green for the personal range, since that pair is
+  // what "in range" means.
+  procedure RangeLine(value: double; lineAttr: byte);
   var
     col: integer;
   begin
@@ -1070,12 +1119,12 @@ var
     // A legend row already has a number in the margin; leave it its own.
     if not isTick then
       if gUnit = mmol then
-        MoveStr(B, Format('%6.1f', [value]), LevelAttr(BGRange))
+        MoveStr(B, Format('%6.1f', [value]), lineAttr)
       else
-        MoveStr(B, Format('%6.0f', [value]), LevelAttr(BGRange));
-    MoveChar(B[MARGIN - 1], '+', LevelAttr(BGRange), 1);
+        MoveStr(B, Format('%6.0f', [value]), lineAttr);
+    MoveChar(B[MARGIN - 1], '+', lineAttr, 1);
     for col := 0 to gw - 1 do
-      MoveChar(B[MARGIN + col], #250, LevelAttr(BGRange), 1);
+      MoveChar(B[MARGIN + col], #250, lineAttr, 1);
   end;
 
   // Map a value onto the current row's half-steps and emit the right glyph.
@@ -1123,7 +1172,12 @@ begin
   // Header: the reading under the cursor while the arrow keys browse the
   // history, the live line otherwise. The cursor's column is the one drawn
   // in white below.
-  MoveChar(B, ' ', attrText, Size.X);
+  // Old data is the one thing this row must not be quiet about: a reading
+  // that has stopped moving looks exactly like a steady one. A fallback
+  // reading says so itself (CurrentLine); a "current" one that has gone
+  // three intervals without a successor gets the same treatment, by the
+  // rule --watch fires --on-stale on. Either way the row turns yellow.
+  warn := false;
   if gSel >= 0 then
     lbl := ' ' + FormatDateTime('hh:nn', gReadings[gSel].date) + '  ' +
       gReadings[gSel].format(gUnit, BG_MSG_DEF) +
@@ -1131,6 +1185,17 @@ begin
   else
   begin
     lbl := ' ' + CurrentLine(false);
+    if gHaveCurrent then
+    begin
+      warn := gStale;
+      if (not gStale) and
+        (MinutesBetween(Now, gCurrent.date) >= gInterval * STALE_INTERVALS) then
+      begin
+        warn := true;
+        lbl := lbl + Format('  [no new reading for %d min]',
+          [MinutesBetween(Now, gCurrent.date)]);
+      end;
+    end;
     if gStatus <> '' then
       lbl := lbl + '  -  ' + gStatus;
     if (pn > 0) and (Length(gReadings) > 0) then
@@ -1143,7 +1208,12 @@ begin
         [chPredFull, horizon, gPredictConf * 100]);
     end;
   end;
-  MoveStr(B, Copy(lbl, 1, Size.X), attrText);
+  if warn then
+    hdrAttr := attrWarn
+  else
+    hdrAttr := attrText;
+  MoveChar(B, ' ', hdrAttr, Size.X);
+  MoveStr(B, Copy(lbl, 1, Size.X), hdrAttr);
   WriteLine(0, 0, Size.X, 1, B);
 
   if (Length(gReadings) = 0) or (gh < 2) or (gw < 2) then
@@ -1228,10 +1298,12 @@ begin
     pad := 6;
     step := 50;  // ... and every 50 mg/dL
   end;
+  IncludeLimits(minV, maxV);
   minV := minV - pad;
   maxV := maxV + pad;
   band := (maxV - minV) / gh;
   RangeBounds(rangeHiV, rangeLoV);
+  LimitBounds(limHiV, limLoV);
 
   for y := 1 to Size.Y - 2 do
   begin
@@ -1270,10 +1342,13 @@ begin
         MoveChar(B[MARGIN + x], #250, attrLabel, 1);
     end;
 
-    // ... and where the personal range ends, over the legend's own line: the
-    // band the bars are meant to stay inside is the more specific fact.
-    RangeLine(rangeHiV);
-    RangeLine(rangeLoV);
+    // ... the limits, and where the personal range ends, over the legend's
+    // own line: the band the bars are meant to stay inside is the more
+    // specific fact.
+    RangeLine(limHiV, LevelAttr(BGHigh));
+    RangeLine(limLoV, LevelAttr(BGLOW));
+    RangeLine(rangeHiV, LevelAttr(BGRange));
+    RangeLine(rangeLoV, LevelAttr(BGRange));
 
     // Bars: value mapped to half-block steps from the bottom. The cursor's
     // column trades its level color for white — the header carries the value.
@@ -2477,7 +2552,7 @@ const
   // so and fires --on-stale: a sensor warm-up, a phone out of range, a site
   // that stopped answering. 15 minutes at the 5-minute cadence, which is
   // when a person would start wondering too.
-  WATCH_STALE_INTERVALS = 3;
+  WATCH_STALE_INTERVALS = STALE_INTERVALS;
   // While a low or high persists, its command fires again this often.
   // Zero means only on entry.
   WATCH_DEFAULT_REMIND_MIN = 30;
