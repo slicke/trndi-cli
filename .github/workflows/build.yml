@@ -279,6 +279,9 @@ jobs:
         run: |
           LATEST=$(git tag | grep -E '^build-[0-9]+$' | sed 's/^build-//' | sort -n | tail -1)
           echo "num=$(( ${LATEST:-99} + 1 ))" >> "$GITHUB_OUTPUT"
+          # The tag before this one, for the changelog. Empty on the first
+          # release, which then lists every commit.
+          echo "prev=${LATEST:+build-$LATEST}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/download-artifact@v4
         with:
@@ -289,10 +292,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           NUM=${{ steps.ver.outputs.num }}
+          PREV=${{ steps.ver.outputs.prev }}
+          # Changelog: the commit subjects since the previous build tag.
+          # Commits land on main directly rather than through PRs, so gh's
+          # --generate-notes would come out empty; the one-line imperative
+          # subjects read well enough as a list on their own.
+          LOG=$(git log --no-merges --format='- %s (%h)' "${PREV:+$PREV..}HEAD")
+          {
+            echo "## Changes${PREV:+ since $PREV}"
+            echo
+            echo "${LOG:-- (no new commits)}"
+            echo
+            echo "Automated build of ${GITHUB_SHA}. Setup: see MANUAL.md."
+          } > notes.md
           # No --target: like trndi, tag whatever main's HEAD is at publish
           # time. Targeting $GITHUB_SHA 403s as soon as a newer push has
           # landed, since the API refuses non-head SHAs for the token.
           gh release create "build-${NUM}" \
             --title "Build ${NUM}" \
-            --notes "Automated build of ${GITHUB_SHA}. Setup: see MANUAL.md." \
+            --notes-file notes.md \
             dist/*/*
