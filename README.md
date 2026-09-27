@@ -24,7 +24,7 @@ The arrow keys walk a cursor across the bars — the header shows the exact valu
 
 `F6` (or starting with `--predict`) adds a half-hour forecast past a divider on the right, drawn in shade rather than solid so it never reads as measured data. It comes from Trndi's own prediction model — a robust weighted regression with a curvature term — and appears only when the fit is worth showing: a flat trend or a noisy sensor leaves it out entirely, and the header carries the horizon and the model's own confidence (`forecast ▒ +30 min 66%`). It is off by default and knows nothing about insulin or carbs, so treat it as the shape of the last half hour continued, not a plan.
 
-With `--stats` it summarises a period instead — average, spread, GMI and the time-in-range bands, taken from the same thresholds the graph colors use:
+With `--stats` it summarises a period instead — average, median, spread, GMI, excursions past the limits, the longest gap in the data and the time-in-range bands. The figures are worked out by the same code as the summary in the Trndi app, and the bands by the same thresholds the graph colors use:
 
 ![The --stats output: average, standard deviation, GMI, extremes and a five-band time-in-range breakdown with bars](doc/img/stat.png)
 

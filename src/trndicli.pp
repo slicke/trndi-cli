@@ -41,7 +41,8 @@
   trend arrow and delta, then exits. With --graph it opens a Free Vision TUI
   showing the reading and a block-character graph, refreshing every 5 minutes
   (F5 forces a refresh). With --stats it summarises a period of history:
-  average, variability, GMI and the time-in-range distribution. With --spark
+  average, median, variability, GMI, excursions, the longest gap and the
+  time-in-range distribution. With --spark
   the recent history becomes a one-line sparkline, colored by the same
   thresholds as the graph. With --agp (or F7 in graph mode) the last two
   weeks fold onto one 24-hour axis as a median line with percentile bands —
@@ -77,7 +78,7 @@ termio, // IsATTY, for deciding whether the sparkline gets colors
 Classes, Process, // TProcess runs the --watch hooks with their own environment
 App, Objects, Drivers, Views, Menus, FVConsts, Video,
 trndi.native, trndi.native.console,
-trndi.api, trndi.api.registry, trndi.types, trndi.funcs.core,
+trndi.api, trndi.api.registry, trndi.types, trndi.funcs.core, trndi.report,
 trndicli.settings;
 
 const
@@ -1775,18 +1776,29 @@ begin
     [name, band, Bar(pct), pct, FmtDuration(count * interval)]));
 end;
 
-// Summarise the last `hours` hours: average, spread, GMI and the standard
-// five-band time-in-range breakdown. The bands come from the backend's own
-// thresholds via getLevel, so they match the colors used in graph mode.
+// Summarise the last `hours` hours: average, median, spread, GMI, excursions
+// and the standard five-band time-in-range breakdown. The figures come from
+// trndi.report, so they match the summary in the Trndi app. The bands are
+// still cut by getLevel instead of the report's own bands: the report counts
+// a reading exactly on a limit as in range and wants both personal bounds or
+// neither, while the graph colors, --csv and --check all go by getLevel.
 procedure RunStats(hours: integer);
+const
+  // Readings the clock skew dates a little past now still belong to the
+  // window; trndi.report drops anything newer than its end.
+  SKEW_MINS = 5;
+  // A gap up to this many readings' spacing is the sensor reporting normally
+  // (REPORT_GAP_FACTOR in Trndi's own summary).
+  GAP_FACTOR = 1.5;
 var
   readings: BGResults;
+  st: TTrndiReportStats;
   core: CGMCore;
   counts: array[BGValLevel] of integer;
   lvl: BGValLevel;
-  cutoff, oldest, minAt, maxAt: TDateTime;
-  i, n, interval, expected, coverage, span: integer;
-  v, sum, sumsq, mean, sd, cv, gmi, minV, maxV, inLo, inHi: double;
+  cutoff: TDateTime;
+  i, n, interval, cadence, span: integer;
+  inLo, inHi: double;
   hasTop, hasBottom: boolean;
   timeFmt, sinceFmt, u: string;
 begin
@@ -1798,42 +1810,15 @@ begin
   // backends that count from their own idea of "now".
   readings := FetchReadingsSafe(span, span div interval + 16);
 
-  cutoff := IncMinute(Now, -span);
-  n := 0;
-  sum := 0;
-  sumsq := 0;
-  minV := 0;
-  maxV := 0;
-  oldest := 0;
-  minAt := 0;
-  maxAt := 0;
-  for lvl := Low(BGValLevel) to High(BGValLevel) do
-    counts[lvl] := 0;
+  core := gApi.cgm;
+  // In mg/dL throughout, like the thresholds; FmtBG converts on the way out.
+  st := TrndiBuildReport(readings, mgdl,
+    TrndiMakeReportLimits(core.lo, core.hi, core.bottom, core.top,
+    (core.top <> TrndiAPI.CGM_RANGE_HI_DISABLED) and
+    (core.bottom <> TrndiAPI.CGM_RANGE_LO_DISABLED)),
+    span + SKEW_MINS, IncMinute(Now, SKEW_MINS));
 
-  for i := 0 to High(readings) do
-  begin
-    if readings[i].date < cutoff then
-      continue;                       // backends may hand back a wider window
-    v := readings[i].convert(mgdl);
-    if (n = 0) or (readings[i].date < oldest) then
-      oldest := readings[i].date;
-    if (n = 0) or (v < minV) then
-    begin
-      minV := v;
-      minAt := readings[i].date;
-    end;
-    if (n = 0) or (v > maxV) then
-    begin
-      maxV := v;
-      maxAt := readings[i].date;
-    end;
-    sum := sum + v;
-    sumsq := sumsq + v * v;
-    Inc(counts[gApi.getLevel(v)]);
-    Inc(n);
-  end;
-
-  if n = 0 then
+  if not st.valid then
   begin
     if gFetchErr <> '' then
       writeln(stderr, 'History fetch failed: ', gFetchErr)
@@ -1842,28 +1827,25 @@ begin
     halt(4);
   end;
 
-  mean := sum / n;
-  if n >= 2 then
-    sd := sqrt((sumsq - sum * sum / n) / (n - 1))
-  else
-    sd := 0;
-  if mean > 0 then
-    cv := sd / mean * 100
-  else
-    cv := 0;
-  gmi := 3.31 + 0.02392 * mean;       // Bergenstal et al., mean in mg/dL
+  // The same window the report used, for the band counts.
+  cutoff := IncMinute(Now, -span);
+  n := 0;
+  for lvl := Low(BGValLevel) to High(BGValLevel) do
+    counts[lvl] := 0;
+  for i := 0 to High(readings) do
+    if readings[i].date >= cutoff then
+    begin
+      Inc(counts[gApi.getLevel(readings[i].convert(mgdl))]);
+      Inc(n);
+    end;
 
-  // Readings actually seen against what the interval promises. Uploaders that
-  // beat their nominal interval would push this over 100%, which reads as an
-  // error rather than as good coverage.
-  expected := span div interval;
-  if expected < 1 then
-    expected := 1;
-  coverage := round(n / expected * 100);
-  if coverage > 100 then
-    coverage := 100;
+  // The spacing the readings actually arrived at, which the coverage figure
+  // is measured against too; a single reading has none, so fall back to the
+  // backend's nominal interval for the band durations.
+  cadence := Round(st.cadenceMinutes);
+  if cadence < 1 then
+    cadence := interval;
 
-  core := gApi.cgm;
   // A personal bound that meets or passes the hard limit leaves its band
   // empty — an override.hi at the backend's own target top does that — so
   // fold it away rather than print a "10.0-10.0" row.
@@ -1895,43 +1877,51 @@ begin
 
   writeln(Format('Stats — last %d h — %s', [hours, gApi.systemName]));
   // Where the data actually starts, so a window the backend could not fill —
-  // capped fetch, sensor change, a fresh site — shows up as more than a low
-  // coverage figure.
-  writeln(Format('%d readings since %s, %d%% coverage at a %d min interval',
-    [n, FormatDateTime(sinceFmt, oldest), coverage, interval]));
+  // capped fetch, sensor change, a fresh site — shows up; the coverage is
+  // counted from there, against the spacing the sensor itself kept.
+  writeln(Format('%d readings since %s, %.0f%% coverage at a %d min interval',
+    [st.count, FormatDateTime(sinceFmt, st.first), st.coverage, cadence]));
   writeln;
-  writeln(Format('  Average   %7s %s', [FmtBG(mean), u]));
-  writeln(Format('  Std dev   %7s %s  (CV %.1f%%)', [FmtBG(sd), u, cv]));
+  writeln(Format('  Average   %7s %s', [FmtBG(st.mean), u]));
+  writeln(Format('  Median    %7s %s', [FmtBG(st.median), u]));
+  writeln(Format('  Std dev   %7s %s  (CV %.1f%%)', [FmtBG(st.sd), u, st.cv]));
   writeln(Format('  GMI       %7.1f %%  (%.0f mmol/mol)',
-    [gmi, (gmi - 2.15) * 10.929]));
+    [st.gmiPercent, st.gmiMmolMol]));
   writeln(Format('  Lowest    %7s %s  at %s',
-    [FmtBG(minV), u, FormatDateTime(timeFmt, minAt)]));
+    [FmtBG(st.lowest), u, FormatDateTime(timeFmt, st.lowestAt)]));
   writeln(Format('  Highest   %7s %s  at %s',
-    [FmtBG(maxV), u, FormatDateTime(timeFmt, maxAt)]));
+    [FmtBG(st.highest), u, FormatDateTime(timeFmt, st.highestAt)]));
+  // Runs of TRNDI_REPORT_EXCURSION_MIN or more readings past a hard limit;
+  // a single stray sample is sensor noise, not an event.
+  writeln(Format('  Excursions  %d low, %d high',
+    [st.lowExcursions, st.highExcursions]));
+  if st.longestGap > st.cadenceMinutes * GAP_FACTOR then
+    writeln(Format('  Longest gap %s, from %s',
+      [FmtDuration(st.longestGap), FormatDateTime(timeFmt, st.longestGapAt)]));
   writeln;
 
   // Five bands when a personal target range is configured, three when the
   // backend only reports hard high/low limits (the sublevels stay empty then).
   if hasTop then
   begin
-    StatRow('Very high', '>' + FmtBG(core.hi), counts[BGHigh], n, interval);
+    StatRow('Very high', '>' + FmtBG(core.hi), counts[BGHigh], n, cadence);
     StatRow('High', FmtBG(core.top) + '-' + FmtBG(core.hi),
-      counts[BGRangeHI], n, interval);
+      counts[BGRangeHI], n, cadence);
   end
   else
-    StatRow('High', '>' + FmtBG(core.hi), counts[BGHigh], n, interval);
+    StatRow('High', '>' + FmtBG(core.hi), counts[BGHigh], n, cadence);
 
   StatRow('In range', FmtBG(inLo) + '-' + FmtBG(inHi), counts[BGRange], n,
-    interval);
+    cadence);
 
   if hasBottom then
   begin
     StatRow('Low', FmtBG(core.lo) + '-' + FmtBG(core.bottom),
-      counts[BGRangeLO], n, interval);
-    StatRow('Very low', '<' + FmtBG(core.lo), counts[BGLOW], n, interval);
+      counts[BGRangeLO], n, cadence);
+    StatRow('Very low', '<' + FmtBG(core.lo), counts[BGLOW], n, cadence);
   end
   else
-    StatRow('Low', '<' + FmtBG(core.lo), counts[BGLOW], n, interval);
+    StatRow('Low', '<' + FmtBG(core.lo), counts[BGLOW], n, cadence);
 end;
 
 {------------------------------------------------------------------------------
