@@ -26,7 +26,7 @@ The arrow keys walk a cursor across the bars — the header shows the exact valu
 
 With `--stats` it summarises a period instead — average, median, spread, GMI, excursions past the limits, the longest gap in the data and the time-in-range bands. The figures are worked out by the same code as the summary in the Trndi app, and the bands by the same thresholds the graph colors use:
 
-![The --stats output: average, standard deviation, GMI, extremes and a five-band time-in-range breakdown with bars](doc/img/stat.png)
+![The --stats output: average, median, standard deviation, GMI, extremes, excursions, the longest gap and a five-band time-in-range breakdown with bars](doc/img/stat.png)
 
 With `--spark` the last hours become a single line — the graph's shape and colors as a sparkline, followed by the current reading — sized to fit a status bar, MOTD or prompt:
 
