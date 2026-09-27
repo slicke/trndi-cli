@@ -54,6 +54,14 @@ debug: src/trndicli.pp $(VERSION_INC)
 	@mkdir -p lib bin
 	$(FPC) $(FPCFLAGS) -g -gl -gh src/trndicli.pp
 
+# Trndi's debug backends, for screenshots: -dDEBUG puts them in the registry,
+# and on macOS DEBUG builds trndi.log on the nsutils Cocoa helpers. Units and
+# binary go to their own directories so the release build never picks up a
+# DEBUG unit. doc/demo.sh runs it against a made-up day.
+demo: src/trndicli.pp src/trndicli.settings.pp $(VERSION_INC)
+	@mkdir -p lib/demo bin/demo
+	$(FPC) $(FPCFLAGS) -dDEBUG -Fu$(T)/units/misc/nsutils -FUlib/demo -FEbin/demo src/trndicli.pp
+
 clean:
 	rm -rf lib bin
 
@@ -89,4 +97,4 @@ uninstall:
 	rm -f $(DESTDIR)$(DATADIR)/zsh/site-functions/_trndi-cli
 	rm -f $(DESTDIR)$(DATADIR)/fish/vendor_completions.d/trndi-cli.fish
 
-.PHONY: all debug clean install install-completions uninstall FORCE
+.PHONY: all debug demo clean install install-completions uninstall FORCE
