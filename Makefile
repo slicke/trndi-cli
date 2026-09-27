@@ -21,6 +21,16 @@ UNITDIRS := -Fu$(T)/units/trndi -Fu$(T)/units/trndi/api \
 FPCFLAGS := -Mobjfpc -Sh -dX_CONSOLE -dWITHTHREADS $(UNITDIRS) -Fi$(T)/inc \
             -Filib -FUlib -FEbin -otrndi-cli $(FPCEXTRA)
 
+# macOS: the stock fpc.cfg puts every package on the unit path, and univint's
+# Carbon Menus shadows Free Vision's, so FV's App fails its checksum and the
+# compiler goes looking for sources it does not have. Naming fv/ on the
+# command line puts it first. And FPC on Darwin does not turn trndi.curl's
+# external 'libcurl.dylib' into a link request, so ask for it outright.
+ifeq ($(shell uname -s),Darwin)
+  FPC_UNITS := $(dir $(realpath $(shell $(FPC) -PB)))units/$(shell $(FPC) -iTP)-$(shell $(FPC) -iTO)
+  FPCFLAGS += -Fu$(FPC_UNITS)/fv -k-lcurl
+endif
+
 all: bin/trndi-cli
 
 # Rewritten only when the description actually changed, so an unchanged
@@ -36,7 +46,7 @@ $(VERSION_INC): FORCE
 
 FORCE:
 
-bin/trndi-cli: src/trndicli.pp src/trndicli.settings.pp $(VERSION_INC) $(wildcard $(T)/units/trndi/*.pp $(T)/units/trndi/api/*.pp)
+bin/trndi-cli: src/trndicli.pp src/trndicli.settings.pp $(VERSION_INC) $(wildcard $(T)/units/trndi/*.pp $(T)/units/trndi/api/*.pp $(T)/units/misc/*.pp)
 	@mkdir -p lib bin
 	$(FPC) $(FPCFLAGS) src/trndicli.pp
 
