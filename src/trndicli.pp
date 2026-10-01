@@ -165,6 +165,8 @@ var
   gPredictOK: boolean = false;
   gPredictConf: double = 0;
   gPredictStable: boolean = false;
+  // Why the last FetchPredictions produced nothing ('' = it did not fail).
+  gPredictErr: string = '';
   // Graph-mode cursor: index into gReadings while the arrow keys browse the
   // history, -1 when the header shows the live reading. gFirstVis is the
   // oldest index the last Draw fit on screen, so the cursor stops at the
@@ -364,25 +366,29 @@ begin
 end;
 
 // predictReadings runs a history fetch of its own, so it costs a second
-// request per refresh — only spend it when the main fetch produced something.
-// A backend that just failed will not forecast either, and LibreLinkUp in
-// particular is unhappy about needless calls.
-procedure FetchPredictions;
+// request per refresh — only spend it when the main fetch produced something
+// (haveData). A backend that just failed will not forecast either, and
+// LibreLinkUp in particular is unhappy about needless calls.
+procedure FetchPredictions(haveData: boolean);
 begin
   gPredictOK := false;
   gPredictConf := 0;
   gPredictStable := false;
+  gPredictErr := '';
   SetLength(gPredictions, 0);
-  if (not gPredictEnabled) or (Length(gReadings) = 0) then
+  if (not gPredictEnabled) or (not haveData) then
     exit;
   try
     gPredictOK := gApi.predictReadings(PREDICT_COUNT, gPredictions);
+    if not gPredictOK then
+      gPredictErr := gApi.errormsg;
   except
     // The forecast is an extra: a failed one drops the overlay, it does not
     // cost the graph that was fetched successfully.
-    on Exception do
+    on E: Exception do
     begin
       gPredictOK := false;
+      gPredictErr := E.Message;
       SetLength(gPredictions, 0);
       exit;
     end;
@@ -526,7 +532,7 @@ begin
   gReadings := FetchReadingsSafe(GRAPH_SPAN_MIN, GRAPH_MAX_READINGS);
   SortReadingsAscending(gReadings);
   gInterval := HistoryInterval(gReadings);
-  FetchPredictions;
+  FetchPredictions(Length(gReadings) > 0);
   gLastFetch := GetTickCount64;
   if gFetchErr <> '' then
     gStatus := 'fetch failed: ' + gFetchErr
@@ -1575,7 +1581,7 @@ begin
       // Turning it back on mid-session has nothing to draw yet, so pay for the
       // fetch here rather than leaving the key press look like it did nothing.
       if gPredictEnabled and (not gPredictOK) then
-        FetchPredictions;
+        FetchPredictions(Length(gReadings) > 0);
       if GraphWin <> nil then
         GraphWin^.Redraw;
     end;
@@ -2793,13 +2799,85 @@ begin
   until false;
 end;
 
+// --predict outside graph mode: the forecast as text under the reading line,
+// one row per point, each led by its distance from the latest reading so it
+// cannot pass for a measurement. The graph's rules for leaving it out apply
+// here too (PredictColumns), and so does the GUI's: a stale reading has no
+// trend to continue. A forecast that is left out says why, but on stderr —
+// stdout carries forecast rows or nothing — and never fails the run: the
+// reading above it was fetched fine.
+//
+// Returns where the forecast is heading, for --check: BGHigh or BGLOW when a
+// point crosses that threshold within the horizon (the first crossing
+// decides), BGRange when none does or there is no forecast to go by.
+function PrintForecast: BGValLevel;
+var
+  i, mins, w: integer;
+  vals: array of string;
+  lvl: BGValLevel;
+begin
+  Result := BGRange;
+  if gStale then
+  begin
+    writeln(stderr, 'No forecast: the reading is stale.');
+    exit;
+  end;
+  FetchPredictions(true);
+  if not gPredictOK then
+  begin
+    if gPredictErr <> '' then
+      writeln(stderr, 'No forecast: ', gPredictErr)
+    else
+      writeln(stderr, 'No forecast: not enough recent readings.');
+    exit;
+  end;
+  if gPredictStable then
+  begin
+    writeln(stderr, 'No forecast: the trend is flat.');
+    exit;
+  end;
+  if PredictColumns = 0 then
+  begin
+    writeln(stderr, Format('No forecast: the recent readings are too noisy ' +
+      '(%.0f%% confidence).', [gPredictConf * 100]));
+    exit;
+  end;
+  writeln(Format('forecast, %.0f%% confidence:', [gPredictConf * 100]));
+  // Right-align the values: a forecast crossing 10 mmol/L changes width.
+  SetLength(vals, Length(gPredictions));
+  w := 0;
+  for i := 0 to High(gPredictions) do
+  begin
+    vals[i] := gPredictions[i].format(gUnit, BG_MSG_DEF);
+    if Length(vals[i]) > w then
+      w := Length(vals[i]);
+  end;
+  for i := 0 to High(gPredictions) do
+  begin
+    mins := round((gPredictions[i].date - gCurrent.date) * MinsPerDay);
+    writeln(Format('  %3s min  %*s %s', ['+' + IntToStr(mins), w, vals[i],
+      BG_TREND_ARROWS_UTF[gPredictions[i].trend]]));
+    lvl := gApi.getLevel(gPredictions[i].convert(mgdl));
+    if (Result = BGRange) and (lvl in [BGHigh, BGLOW]) then
+      Result := lvl;
+  end;
+end;
+
 // The one-shot print. With check the exit code carries where the reading
 // sits — 0 in range, 5 above the high threshold, 6 below the low one — so a
 // script can alarm without parsing the line. The bands match the graph
 // colors: the personal-limit sublevels count as in range, as they draw green.
 // A stale fallback keeps exit 4; a cron job polling every few minutes should
 // not alarm on hours-old data.
+//
+// With --predict as well, a reading that is in range now but forecast to
+// cross a threshold exits 7 (heading high) or 8 (heading low). Where the
+// reading already is wins: 5 and 6 are the more urgent answer, and a high
+// that is coming down is still a high. No forecast — flat trend, noisy fit —
+// is no warning, so it stays 0.
 procedure RunOnce(check: boolean);
+var
+  ahead: BGValLevel = BGRange;
 begin
   FetchCurrent;
   if not gHaveCurrent then
@@ -2811,6 +2889,8 @@ begin
     halt(4);
   end;
   writeln(CurrentLine);
+  if gPredictEnabled then
+    ahead := PrintForecast;
   if (not check) or gStale then
   begin
     if check then
@@ -2822,6 +2902,12 @@ begin
     halt(5);
   BGLOW:
     halt(6);
+  end;
+  case ahead of
+  BGHigh:
+    halt(7);
+  BGLOW:
+    halt(8);
   end;
 end;
 
@@ -2891,7 +2977,9 @@ begin
   writeln(Format('                   (default %d; 0 fires only on entry). CMD runs in the',
     [WATCH_DEFAULT_REMIND_MIN]));
   writeln('                   shell with TRNDI_VALUE, TRNDI_LEVEL, TRNDI_EVENT... set');
-  writeln('      --predict    graph mode: start with the forecast drawn (F6 toggles)');
+  writeln('      --predict    add a half-hour forecast: rows under the reading line,');
+  writeln('                   or drawn from the start in graph mode (F6 toggles);');
+  writeln('                   with --check, exit 7 heading high, 8 heading low');
   writeln('  -u, --unit U     show values in U (mmol or mgdl) for this run, whatever');
   writeln('                   the settings say; the setting itself is left alone');
   writeln('  -p, --profile N  use account N of the GUI''s multi-user mode; bare');

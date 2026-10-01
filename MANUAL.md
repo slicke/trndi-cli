@@ -218,6 +218,8 @@ trndi-cli exits with a distinct code and a message on stderr:
 | `4` | No recent reading | Backend reachable but silent > 24 h (with `--stats` or `--csv`: nothing in the requested window; with `--agp`: fewer than 3 days of history came back; with `--check`: also a stale fallback, so scripts never alarm on old data; with `--device`: the backend reported no sensor or pump status at all) — check the uploader |
 | `5` | Above the high threshold | Only from `--check` — an answer, not an error |
 | `6` | Below the low threshold | Only from `--check` — an answer, not an error |
+| `7` | Heading above the high threshold | Only from `--check --predict`: in range now, forecast to cross within half an hour — an answer, not an error |
+| `8` | Heading below the low threshold | Only from `--check --predict`, as above |
 | `64` | Bad command line | Unknown option, a `--stats`, `--spark`, `--agp` or `--csv` window outside its range, a `--unit` other than `mmol`/`mgdl`, a `--profile` name not in the accounts, or `--setup` without a terminal |
 
 `--check` prints the same line as a plain run; the exit code uses the same
@@ -252,5 +254,15 @@ the plot. Note that producing one costs a second request per refresh, which is
 worth knowing on backends that rate-limit aggressively — LibreLinkUp in
 particular. (`--no-predict`, the opt-out from when the forecast was on by
 default, is still accepted.)
+
+**"No forecast: ..." after the reading line** — `--predict` without `--graph`
+prints the forecast as rows under the reading, and leaves it out on the same
+grounds as the graph: a flat trend, a fit below 50% confidence, or too few
+recent readings to fit at all. A stale reading gets none either — an old trend
+has nothing to continue. The reason is printed on stderr and the exit code is
+unaffected; only a plain run and `--check` take the option this way, the other
+modes ignore it. Under `--check` a forecast that is left out is no warning:
+exit codes 7 and 8 need a forecast row past a threshold, so the run exits 0
+(or 5/6 for where the reading already is).
 
 > ⚠️ **Medical disclaimer**: trndi-cli is NOT a medical device. Data may be delayed, inaccurate or unavailable. Never make medical decisions based on this software — verify with official devices.

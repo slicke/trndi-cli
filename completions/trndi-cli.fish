@@ -19,7 +19,7 @@ complete -c trndi-cli -l on-high -d 'Watch: run a command when the reading goes 
 complete -c trndi-cli -l on-ok -d 'Watch: run a command when the reading comes back into range' -x -a '(__fish_complete_command)'
 complete -c trndi-cli -l on-stale -d 'Watch: run a command when no reading has arrived for 3 intervals' -x -a '(__fish_complete_command)'
 complete -c trndi-cli -l remind -d 'Watch: repeat --on-low/--on-high every M minutes while it lasts (default 30, 0 = entry only)' -x
-complete -c trndi-cli -l predict -d 'Graph mode: start with the forecast drawn (F6 toggles)'
+complete -c trndi-cli -l predict -d 'Add a half-hour forecast: rows under the reading, or drawn in graph mode (F6 toggles); with --check, exit 7 heading high, 8 heading low'
 complete -c trndi-cli -s u -l unit -d 'Show values in this unit for this run only' -x -a 'mmol mgdl'
 # A bare `trndi-cli --profile` prints the accounts one per line, so the real
 # names complete; the option also works bare, hence no -x.

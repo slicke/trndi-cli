@@ -24,6 +24,21 @@ The arrow keys walk a cursor across the bars — the header shows the exact valu
 
 `F6` (or starting with `--predict`) adds a half-hour forecast past a divider on the right, drawn in shade rather than solid so it never reads as measured data. It comes from Trndi's own prediction model — a robust weighted regression with a curvature term — and appears only when the fit is worth showing: a flat trend or a noisy sensor leaves it out entirely, and the header carries the horizon and the model's own confidence (`forecast ▒ +30 min 66%`). It is off by default and knows nothing about insulin or carbs, so treat it as the shape of the last half hour continued, not a plan.
 
+Without `--graph`, `--predict` prints the same forecast as text under the reading line — one row per point, led by its distance from the latest reading:
+
+```
+9.9 mmol/L → (+0.1)  20:50
+forecast, 81% confidence:
+   +5 min  10.3 mmol/L →
+  +10 min  10.6 mmol/L →
+  +15 min  10.8 mmol/L →
+  +20 min  11.0 mmol/L →
+  +25 min  11.2 mmol/L →
+  +30 min  11.4 mmol/L →
+```
+
+The same rules leave it out, and a stale reading does too; the reason then goes to stderr (`No forecast: the trend is flat.`), so stdout carries forecast rows or nothing, and the exit code is the reading's own either way. With `--check` the exit code looks ahead too — see the exit codes below.
+
 With `--stats` it summarises a period instead — average, median, spread, GMI, excursions past the limits, the longest gap in the data and the time-in-range bands. The figures are worked out by the same code as the summary in the Trndi app, and the bands by the same thresholds the graph colors use:
 
 ![The --stats output: average, median, standard deviation, GMI, extremes, excursions, the longest gap and a five-band time-in-range breakdown with bars](doc/img/stat.png)
@@ -112,7 +127,8 @@ trndi-cli               print the current reading and exit
 trndi-cli --check       ... with the range in the exit code, for scripts
 trndi-cli --graph       interactive TUI graph (arrows inspect readings, F5 refresh,
                         F6 forecast, F7 AGP, F9 settings, Q exits)
-trndi-cli --predict     ... with the forecast drawn from the start
+trndi-cli --predict     the current reading with a half-hour forecast under it;
+                        with --graph, the forecast drawn from the start
 trndi-cli --stats       summarise the last 24 h
 trndi-cli --stats 6     ... or any window from 1 to 168 hours
 trndi-cli --spark       the last 3 h as a one-line sparkline
@@ -137,6 +153,12 @@ Exit codes: `0` OK · `1` not configured · `2` unknown backend · `3` connectio
 
 ```bash
 trndi-cli --check >/dev/null; [ $? -eq 6 ] && notify-send -u critical "Low glucose"
+```
+
+`--check --predict` looks half an hour ahead as well: a reading that is in range now but forecast to cross a threshold exits `7` (heading high) or `8` (heading low). Where the reading already is wins — `5` and `6` still mean high and low now — and a flat trend or a fit too noisy to forecast from stays `0`:
+
+```bash
+trndi-cli --check --predict >/dev/null 2>&1; [ $? -eq 8 ] && notify-send "Heading low"
 ```
 
 `--watch` does the same without the cron entry, and only fires when the band changes rather than every five minutes a low lasts.
