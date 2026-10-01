@@ -21,15 +21,35 @@ jobs:
         with:
           submodules: recursive
 
-      # fp-units-fv provides Free Vision; libcurl4-openssl-dev provides the
-      # libcurl.so link name trndi.curl binds against.
+      # The compiler and the unit packages the build loads, named one by one:
+      # the fpc metapackage depends on every unit package there is, and
+      # fp-units-gtk2 brings libgtk2.0-dev and some 200 packages with it.
+      # fp-units-fcl carries the FCL (and pulls in rtl and base),
+      # fp-units-net the openssl units, fp-units-fv Free Vision. No recommends:
+      # fp-compiler's would add fp-utils and with it the whole FPC source tree.
+      # libcurl4t64 is the run-time library for the smoke test, and on purpose
+      # not libcurl4-openssl-dev: the libcurl.so link name trndi.curl binds
+      # against comes from .github/curl-stub.sh, which says why.
       - name: Install Free Pascal
         run: |
           sudo apt-get update
-          sudo apt-get install -y fpc fp-units-fv libcurl4-openssl-dev
+          sudo apt-get install -y --no-install-recommends fp-compiler fp-units-fcl fp-units-fv fp-units-net libcurl4t64
 
       - name: Build
-        run: make
+        run: |
+          sh .github/curl-stub.sh lib/curl-stub
+          make FPCEXTRA="-Fl$PWD/lib/curl-stub"
+
+      # What the stand-in is for: libcurl.so.4 needed, at no symbol version.
+      # A -dev package finding its way onto the runner would bring the
+      # version requirement back without failing anything else.
+      - name: Check the libcurl linkage
+        run: |
+          readelf -d bin/trndi-cli | grep 'libcurl\.so\.4'
+          if readelf -V bin/trndi-cli | grep CURL_; then
+            echo "trndi-cli asks for a libcurl symbol version" >&2
+            exit 1
+          fi
 
       - name: Smoke test
         run: |
@@ -54,6 +74,10 @@ jobs:
   # It goes through `docker run` rather than the job's `container:` key because
   # the Actions runner ships no i386 node, so the JS actions (checkout, upload)
   # have to stay on the host.
+  # Same package set as the linux job (Debian 12 still calls the library
+  # libcurl4), plus libc6-dev: the bare container has no libc.so link name,
+  # which the fpc metapackage used to supply by way of libgtk2.0-dev. Same
+  # libcurl stand-in and linkage check, too.
   linux-i686:
     runs-on: ubuntu-latest
     steps:
@@ -65,8 +89,14 @@ jobs:
         run: |
           docker run --rm --platform linux/386 -v "$PWD:/src" -w /src i386/debian:12 sh -euc '
             apt-get update
-            apt-get install -y --no-install-recommends make fpc fp-units-fv libcurl4-openssl-dev
-            make
+            apt-get install -y --no-install-recommends make fp-compiler fp-units-fcl fp-units-fv fp-units-net libc6-dev libcurl4
+            sh .github/curl-stub.sh lib/curl-stub
+            make FPCEXTRA=-Fl/src/lib/curl-stub
+            readelf -d bin/trndi-cli | grep "libcurl\.so\.4"
+            if readelf -V bin/trndi-cli | grep CURL_; then
+              echo "trndi-cli asks for a libcurl symbol version" >&2
+              exit 1
+            fi
             ./bin/trndi-cli --help
             # No settings in CI: the unconfigured case must exit 1, not crash.
             set +e

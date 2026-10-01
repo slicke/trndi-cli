@@ -244,6 +244,8 @@ FPC 3.2.2 for Linux/x86_64, built 2026-09-08 18:28:33
 
 **Windows: "libcurl.dll was not found"** — an exe from a build before Trndi 20 (September 2026) needed libcurl; current builds use WinHTTP and run on their own, so update the exe.
 
+**Linux: "libcurl.so.4: no version information available"** — harmless, the reading under it is right. Release builds through 116 were linked against Ubuntu's libcurl, whose symbols carry a version that the libcurl on Fedora, Arch and most other distros does not have, and the loader says so on every start. Later builds ask for no version, so update the binary.
+
 A reading older than ~10 minutes is still printed, marked `[stale, N min old]`.
 
 **No forecast in graph mode** — the forecast is opt-in: `F6` turns it on, or
