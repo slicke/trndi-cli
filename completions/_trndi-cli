@@ -24,7 +24,7 @@ _arguments -s \
   '--on-ok[watch: run a command when the reading comes back into range]:command:_command_names -e' \
   '--on-stale[watch: run a command when no reading has arrived for 3 intervals]:command:_command_names -e' \
   '--remind[watch: repeat --on-low/--on-high every M minutes while it lasts (default 30, 0 = entry only)]:minutes:' \
-  '--predict[graph mode: start with the forecast drawn (F6 toggles)]' \
+  '--predict[add a half-hour forecast: rows under the reading, or drawn in graph mode (F6 toggles); with --check, exit 7 heading high, 8 heading low]' \
   {-u,--unit}'[show values in this unit for this run only]:unit:(mmol mgdl)' \
   {-p,--profile}'[use this multi-user account (bare: list accounts)]::account:{compadd ${(f)"$(trndi-cli --profile 2>/dev/null)"}}' \
   "($modes)--setup[settings window: backend, address, secret, unit, limits]" \
