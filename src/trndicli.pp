@@ -2701,7 +2701,10 @@ end;
 //
 // Fetch errors are reported on stderr and retried, never fatal: a follower
 // that dies on the first dropped connection is not one. Only the initial
-// connect keeps the one-shot exit codes, since that is configuration.
+// connect keeps the one-shot exit codes, since that is configuration - and
+// so does a failure the backend marks as the user's to fix (a rejected
+// password, an expired token): retrying that every minute would only hammer
+// the server with the same bad login, so it leaves with 3 as the connect would.
 procedure RunWatch;
 var
   interval, staleMin: integer;
@@ -2727,6 +2730,13 @@ begin
     FetchCurrent;
     if not gHaveCurrent then
     begin
+      // The backend's verdict, not a guess from the message text: a plain
+      // error is cleared on the next fetch, so this is never a stale mark.
+      if gApi.errorNeedsUser then
+      begin
+        writeln(stderr, FormatDateTime('hh:nn', Now), '  ', gApi.errormsg);
+        halt(3);
+      end;
       // Nothing at all from the backend. Say why once per failure, but only
       // on stderr: stdout stays one line per reading for whatever consumes it.
       if gCurrentErr <> '' then
