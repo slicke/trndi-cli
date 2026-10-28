@@ -95,9 +95,9 @@ const
   // reporting interval); Draw shows the newest slots that fit the window.
   GRAPH_SPAN_MIN = 480;               // minutes of history in the graph
   GRAPH_MAX_READINGS = 480;           // covers 8 h even for 1-min uploaders
-  // Dexcom Share refuses anything above its own window instead of serving
-  // what it can: 24 h, and 288 readings at the 5-minute cadence it assumes.
-  // FetchReadingsSafe retries inside these when a backend throws.
+  // Dexcom Share's own window: 24 h, and 288 readings at the 5-minute
+  // cadence it assumes. The Dexcom backends clamp to it themselves now;
+  // FetchReadingsSafe still retries inside it when any backend throws.
   SHARE_MAX_MINUTES = MinsPerDay;
   SHARE_MAX_READINGS = 288;
   // Half an hour ahead, matching the GUI's overlay. The model knows nothing
@@ -419,10 +419,10 @@ begin
 end;
 
 // getReadings, with the request clamped to Dexcom Share's hard caps on
-// failure: the Dexcom backends raise above (1440 min, 288 readings) rather
-// than serving what they can. Backends that serve weeks (Tandem, CareLink)
-// answer the wide request, so the caps are a fallback rather than a ceiling
-// applied up front.
+// failure (1440 min, 288 readings). The Dexcom backends clamp to these
+// themselves, so this guards any other backend that raises on a window it
+// cannot serve. Backends that serve weeks (Tandem, CareLink) answer the wide
+// request, so the caps are a fallback rather than a ceiling applied up front.
 //
 // Never propagates: a request that fails even clamped — a dropped
 // connection, an expired session — leaves the reason in gFetchErr and
